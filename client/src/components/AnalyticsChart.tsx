@@ -15,7 +15,7 @@ interface AnalyticsChartProps {
   xAxisKey?: string;
 }
 
-const COLORS = ['hsl(250 70% 60%)', 'hsl(220 85% 60%)', 'hsl(145 60% 50%)', 'hsl(35 90% 55%)', 'hsl(260 60% 65%)'];
+const COLORS = ['#1E3A5F', '#2C5F8D', '#4A90BF', '#059669', '#D97706'];
 
 export default function AnalyticsChart({ title, type, data, dataKey = "value", xAxisKey = "name" }: AnalyticsChartProps) {
   return (
@@ -37,7 +37,7 @@ export default function AnalyticsChart({ title, type, data, dataKey = "value", x
                   borderRadius: "0.375rem",
                 }}
               />
-              <Line type="monotone" dataKey={dataKey} stroke="hsl(250 70% 60%)" strokeWidth={2} />
+              <Line type="monotone" dataKey={dataKey} stroke="#2C5F8D" strokeWidth={2} />
             </LineChart>
           ) : type === "bar" ? (
             <BarChart data={data}>
@@ -51,7 +51,7 @@ export default function AnalyticsChart({ title, type, data, dataKey = "value", x
                   borderRadius: "0.375rem",
                 }}
               />
-              <Bar dataKey={dataKey} fill="hsl(250 70% 60%)" radius={[4, 4, 0, 0]} />
+              <Bar dataKey={dataKey} fill="#2C5F8D" radius={[4, 4, 0, 0]} />
             </BarChart>
           ) : (
             <PieChart>
@@ -62,7 +62,7 @@ export default function AnalyticsChart({ title, type, data, dataKey = "value", x
                 labelLine={false}
                 label={(entry) => entry.name}
                 outerRadius={100}
-                fill="hsl(250 70% 60%)"
+                fill="#2C5F8D"
                 dataKey={dataKey}
               >
                 {data.map((entry, index) => (

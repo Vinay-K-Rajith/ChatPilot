@@ -82,7 +82,7 @@ export default function Leads() {
             backgroundImage: 'url(https://images.unsplash.com/photo-1474674556023-efef886fa147?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D)',
           }}
         />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#6366F1]/95 via-[#7C3AED]/90 to-[#3B82F6]/95" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#2C5F8D]/95 via-[#1E3A5F]/90 to-[#4A90BF]/95" />
         <div className="relative p-6 text-white flex items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Leads Management</h1>

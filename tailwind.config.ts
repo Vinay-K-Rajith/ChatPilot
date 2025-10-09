@@ -87,8 +87,8 @@ export default {
         mono: ["var(--font-mono)"],
       },
       backgroundImage: {
-        'gradient-header': 'linear-gradient(135deg, hsl(250 70% 60%), hsl(220 85% 65%))',
-        'gradient-card': 'linear-gradient(90deg, hsl(240 15% 98%), hsl(250 20% 98%))',
+        'gradient-header': 'linear-gradient(135deg, #1E3A5F, #2C5F8D, #4A90BF)',
+        'gradient-card': 'linear-gradient(90deg, #E2E8F0, #F7FAFC)',
       },
       keyframes: {
         "accordion-down": {

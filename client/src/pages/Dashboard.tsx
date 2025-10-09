@@ -86,7 +86,7 @@ export default function Dashboard() {
             backgroundImage: 'url(https://images.unsplash.com/photo-1474674556023-efef886fa147?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D)',
           }}
         />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#7C3AED]/95 via-[#6366F1]/90 to-[#3B82F6]/95" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#1E3A5F]/95 via-[#2C5F8D]/90 to-[#4A90BF]/95" />
         <div className="relative p-6 text-white">
           <h1 className="text-2xl font-bold">Dashboard Overview</h1>
           <p className="text-white/80 mt-1">Monitor your WhatsApp AI CRM performance</p>
