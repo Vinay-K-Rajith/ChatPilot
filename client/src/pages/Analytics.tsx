@@ -68,9 +68,18 @@ export default function Analytics() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="bg-gradient-header rounded-lg p-6 text-white">
-        <h1 className="text-2xl font-bold">Analytics Dashboard</h1>
-        <p className="text-white/80 mt-1">Performance metrics and insights</p>
+      <div className="relative overflow-hidden rounded-lg">
+        <div 
+          className="absolute inset-0 bg-cover bg-center"
+          style={{
+            backgroundImage: 'url(https://images.unsplash.com/photo-1474674556023-efef886fa147?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D)',
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#2C5F8D]/93 via-[#1E3A5F]/88 to-[#4A90BF]/93" />
+        <div className="relative p-6 text-white">
+          <h1 className="text-2xl font-bold">Analytics Dashboard</h1>
+          <p className="text-white/80 mt-1">Performance metrics and insights</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

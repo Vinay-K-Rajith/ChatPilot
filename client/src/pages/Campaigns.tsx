@@ -42,15 +42,24 @@ export default function Campaigns() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="bg-gradient-header rounded-lg p-6 text-white flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Campaign Scheduler</h1>
-          <p className="text-white/80 mt-1">Create and manage promotional campaigns</p>
+      <div className="relative overflow-hidden rounded-lg">
+        <div 
+          className="absolute inset-0 bg-cover bg-center"
+          style={{
+            backgroundImage: 'url(https://images.unsplash.com/photo-1474674556023-efef886fa147?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D)',
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-br from-[#1E3A5F]/93 via-[#4A90BF]/88 to-[#2C5F8D]/93" />
+        <div className="relative p-6 text-white flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Campaign Scheduler</h1>
+            <p className="text-white/80 mt-1">Create and manage promotional campaigns</p>
+          </div>
+          <Button variant="secondary" data-testid="button-create-campaign">
+            <Plus className="h-4 w-4 mr-2" />
+            Create Campaign
+          </Button>
         </div>
-        <Button variant="secondary" data-testid="button-create-campaign">
-          <Plus className="h-4 w-4 mr-2" />
-          Create Campaign
-        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

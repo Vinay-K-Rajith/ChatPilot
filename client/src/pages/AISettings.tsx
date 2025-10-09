@@ -12,9 +12,27 @@ export default function AISettings() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="bg-gradient-header rounded-lg p-6 text-white">
-        <h1 className="text-2xl font-bold">AI Chatbot Settings</h1>
-        <p className="text-white/80 mt-1">Configure AI behavior and responses</p>
+      <div className="relative overflow-hidden rounded-lg">
+        <div 
+          className="absolute inset-0 bg-cover bg-center opacity-20"
+          style={{
+            backgroundImage: 'url(https://www.openmindt.com/wp-content/uploads/2024/12/marketingopenmind-automation-systems-linked-to-each-other-progr-ed68d0cb-ea15-4d2f-8801-f4d619eff529.png)',
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#1E3A5F]/95 via-[#2C5F8D]/90 to-[#4A90BF]/95" />
+        <div className="relative p-6 text-white flex items-center gap-4">
+          <div className="flex-1">
+            <h1 className="text-2xl font-bold">AI Chatbot Settings</h1>
+            <p className="text-white/80 mt-1">Configure AI behavior and responses</p>
+          </div>
+          <div 
+            className="hidden md:block w-20 h-20 bg-contain bg-center bg-no-repeat opacity-60"
+            style={{
+              backgroundImage: 'url(https://www.openmindt.com/wp-content/uploads/2024/12/marketingopenmind-automation-systems-linked-to-each-other-progr-ed68d0cb-ea15-4d2f-8801-f4d619eff529.png)',
+              filter: 'brightness(2)',
+            }}
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

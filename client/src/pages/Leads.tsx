@@ -75,15 +75,24 @@ export default function Leads() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="bg-gradient-header rounded-lg p-6 text-white flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Leads Management</h1>
-          <p className="text-white/80 mt-1">Track and manage your lead pipeline</p>
+      <div className="relative overflow-hidden rounded-lg">
+        <div 
+          className="absolute inset-0 bg-cover bg-center"
+          style={{
+            backgroundImage: 'url(https://images.unsplash.com/photo-1474674556023-efef886fa147?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D)',
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#2C5F8D]/95 via-[#1E3A5F]/90 to-[#2C5F8D]/95" />
+        <div className="relative p-6 text-white flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Leads Management</h1>
+            <p className="text-white/80 mt-1">Track and manage your lead pipeline</p>
+          </div>
+          <Button variant="secondary" data-testid="button-add-lead">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Lead
+          </Button>
         </div>
-        <Button variant="secondary" data-testid="button-add-lead">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Lead
-        </Button>
       </div>
 
       <FilterBar filterOptions={filterOptions} />

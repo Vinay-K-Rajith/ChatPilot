@@ -44,15 +44,24 @@ export default function KnowledgeBase() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="bg-gradient-header rounded-lg p-6 text-white flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Knowledge Base</h1>
-          <p className="text-white/80 mt-1">Manage documents for AI responses</p>
+      <div className="relative overflow-hidden rounded-lg">
+        <div 
+          className="absolute inset-0 bg-cover bg-center opacity-15"
+          style={{
+            backgroundImage: 'url(https://www.openmindt.com/wp-content/uploads/2024/12/marketingopenmind-automation-systems-linked-to-each-other-progr-ed68d0cb-ea15-4d2f-8801-f4d619eff529.png)',
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#1E3A5F]/95 via-[#2C5F8D]/90 to-[#4A90BF]/95" />
+        <div className="relative p-6 text-white flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Knowledge Base</h1>
+            <p className="text-white/80 mt-1">Manage documents for AI responses</p>
+          </div>
+          <Button variant="secondary" data-testid="button-upload-document">
+            <Upload className="h-4 w-4 mr-2" />
+            Upload Document
+          </Button>
         </div>
-        <Button variant="secondary" data-testid="button-upload-document">
-          <Upload className="h-4 w-4 mr-2" />
-          Upload Document
-        </Button>
       </div>
 
       <div className="relative">
