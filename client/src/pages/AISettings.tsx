@@ -19,7 +19,7 @@ export default function AISettings() {
             backgroundImage: 'url(https://www.openmindt.com/wp-content/uploads/2024/12/marketingopenmind-automation-systems-linked-to-each-other-progr-ed68d0cb-ea15-4d2f-8801-f4d619eff529.png)',
           }}
         />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#1E3A5F]/95 via-[#2C5F8D]/90 to-[#4A90BF]/95" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#7C3AED]/95 via-[#6366F1]/90 to-[#3B82F6]/95" />
         <div className="relative p-6 text-white flex items-center gap-4">
           <div className="flex-1">
             <h1 className="text-2xl font-bold">AI Chatbot Settings</h1>
