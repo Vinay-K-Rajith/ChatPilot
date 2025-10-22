@@ -28,7 +28,7 @@ export default function ConversationListExample() {
 
   return (
     <div className="w-96 p-4">
-      <ConversationList conversations={mockConversations} />
+      <ConversationList />
     </div>
   );
 }

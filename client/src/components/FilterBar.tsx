@@ -13,34 +13,104 @@ import { Badge } from "@/components/ui/badge";
 
 interface FilterBarProps {
   onSearch?: (query: string) => void;
-  onFilterChange?: (filters: Record<string, string>) => void;
-  filterOptions?: {
+  onFilter?: (filters: Record<string, string[]>) => void;
+  onFiltersChange?: (filters: any) => void;
+  filterOptions: {
     label: string;
     key: string;
     options: { value: string; label: string }[];
   }[];
 }
 
-export default function FilterBar({ onSearch, onFilterChange, filterOptions = [] }: FilterBarProps) {
+export default function FilterBar({ onSearch, onFilter, onFiltersChange, filterOptions }: FilterBarProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeFilters, setActiveFilters] = useState<Record<string, string>>({});
+  const [activeFilters, setActiveFilters] = useState<Record<string, string[]>>({});
 
   const handleSearch = (value: string) => {
     setSearchQuery(value);
     onSearch?.(value);
+    
+    // Also update the filters for new API
+    if (onFiltersChange) {
+      const filters: any = { search: value || undefined };
+      
+      // Add active filters
+      Object.entries(activeFilters).forEach(([key, values]) => {
+        if (key === 'status' && values.length > 0) {
+          filters.status = values;
+        } else if (key === 'engagement' && values.length > 0) {
+          const engagementValue = values[0];
+          if (engagementValue === 'high') {
+            filters.engagementScore = { min: 80, max: 100 };
+          } else if (engagementValue === 'medium') {
+            filters.engagementScore = { min: 50, max: 79 };
+          } else if (engagementValue === 'low') {
+            filters.engagementScore = { min: 0, max: 49 };
+          }
+        }
+      });
+      
+      onFiltersChange(filters);
+    }
   };
 
   const handleFilterChange = (key: string, value: string) => {
-    const newFilters = { ...activeFilters, [key]: value };
+    const newFilters = { ...activeFilters, [key]: [value] };
     setActiveFilters(newFilters);
-    onFilterChange?.(newFilters);
+    onFilter?.(newFilters);
+    
+    // Also update the filters for new API
+    if (onFiltersChange) {
+      const filters: any = { search: searchQuery || undefined };
+      
+      // Add new filters
+      Object.entries(newFilters).forEach(([filterKey, values]) => {
+        if (filterKey === 'status' && values.length > 0) {
+          filters.status = values;
+        } else if (filterKey === 'engagement' && values.length > 0) {
+          const engagementValue = values[0];
+          if (engagementValue === 'high') {
+            filters.engagementScore = { min: 80, max: 100 };
+          } else if (engagementValue === 'medium') {
+            filters.engagementScore = { min: 50, max: 79 };
+          } else if (engagementValue === 'low') {
+            filters.engagementScore = { min: 0, max: 49 };
+          }
+        }
+      });
+      
+      onFiltersChange(filters);
+    }
   };
 
   const removeFilter = (key: string) => {
     const newFilters = { ...activeFilters };
     delete newFilters[key];
     setActiveFilters(newFilters);
-    onFilterChange?.(newFilters);
+    onFilter?.(newFilters);
+    
+    // Also update the filters for new API
+    if (onFiltersChange) {
+      const filters: any = { search: searchQuery || undefined };
+      
+      // Add remaining filters
+      Object.entries(newFilters).forEach(([filterKey, values]) => {
+        if (filterKey === 'status' && values.length > 0) {
+          filters.status = values;
+        } else if (filterKey === 'engagement' && values.length > 0) {
+          const engagementValue = values[0];
+          if (engagementValue === 'high') {
+            filters.engagementScore = { min: 80, max: 100 };
+          } else if (engagementValue === 'medium') {
+            filters.engagementScore = { min: 50, max: 79 };
+          } else if (engagementValue === 'low') {
+            filters.engagementScore = { min: 0, max: 49 };
+          }
+        }
+      });
+      
+      onFiltersChange(filters);
+    }
   };
 
   return (
@@ -60,7 +130,7 @@ export default function FilterBar({ onSearch, onFilterChange, filterOptions = []
           <Select
             key={filter.key}
             onValueChange={(value) => handleFilterChange(filter.key, value)}
-            value={activeFilters[filter.key] || ""}
+            value={activeFilters[filter.key]?.[0] || ""}
           >
             <SelectTrigger className="w-40" data-testid={`select-${filter.key}`}>
               <div className="flex items-center gap-2">

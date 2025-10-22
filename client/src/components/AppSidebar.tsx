@@ -1,3 +1,4 @@
+import React from "react";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -7,8 +8,9 @@ import {
   BookOpen,
   Settings,
   Bot,
+  TestTube,
 } from "lucide-react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import {
   Sidebar,
   SidebarContent,
@@ -61,13 +63,13 @@ const settingsItems = [
     icon: Bot,
   },
   {
-    title: "Settings",
-    url: "/settings",
-    icon: Settings,
+    title: "Testing",
+    url: "/testing",
+    icon: TestTube,
   },
 ];
 
-export default function AppSidebar() {
+export default React.memo(function AppSidebar() {
   const [location] = useLocation();
 
   return (
@@ -91,10 +93,10 @@ export default function AppSidebar() {
               {menuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
-                    <a href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
+                    <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>
-                    </a>
+                    </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
@@ -108,10 +110,10 @@ export default function AppSidebar() {
               {settingsItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
-                    <a href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
+                    <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
                       <item.icon className="h-4 w-4" />
                       <span>{item.title}</span>
-                    </a>
+                    </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
@@ -121,4 +123,4 @@ export default function AppSidebar() {
       </SidebarContent>
     </Sidebar>
   );
-}
+});

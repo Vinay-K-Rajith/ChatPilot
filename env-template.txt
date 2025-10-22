@@ -1,0 +1,24 @@
+# Environment Configuration Template
+# Copy this file to .env and fill in your actual credentials
+
+# MongoDB Atlas Configuration
+# Get your connection string from MongoDB Atlas dashboard
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/<database>?retryWrites=true&w=majority
+MONGODB_DB_NAME=test
+
+# OpenAI Configuration
+# Get your API key from https://platform.openai.com/api-keys
+OPENAI_API_KEY=sk-your-openai-api-key-here
+
+# Twilio Configuration
+# Get these from your Twilio Console: https://console.twilio.com/
+TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TWILIO_AUTH_TOKEN=your-twilio-auth-token-here
+TWILIO_PHONE_NUMBER=+1234567890
+
+# Server Configuration
+PORT=3000
+NODE_ENV=development
+
+# Optional: Webhook URL for Twilio (if using webhooks)
+TWILIO_WEBHOOK_URL=https://your-domain.com/webhook/twilio

@@ -1,26 +1,33 @@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Mail, Phone, MessageSquare } from "lucide-react";
+import { Mail, Phone, MessageSquare, Edit, Trash2, Trash } from "lucide-react";
 import { format } from "date-fns";
-
-interface Lead {
-  id: string;
-  name: string;
-  phone: string;
-  email?: string;
-  status: "new" | "contacted" | "qualified" | "converted" | "lost";
-  engagementScore: number;
-  lastContactedAt?: Date;
-}
+import type { LeadWithId } from "../../../shared/models/lead";
 
 interface LeadTableProps {
-  leads: Lead[];
+  leads: LeadWithId[];
+  selectedLeads?: string[];
+  onSelectLead?: (id: string, selected: boolean) => void;
+  onSelectAll?: (selected: boolean) => void;
   onContactLead?: (id: string) => void;
+  onEditLead?: (lead: LeadWithId) => void;
+  onDeleteLead?: (id: string) => void;
+  isLoading?: boolean;
 }
 
-export default function LeadTable({ leads, onContactLead }: LeadTableProps) {
+export default function LeadTable({ 
+  leads, 
+  selectedLeads = [],
+  onSelectLead,
+  onSelectAll,
+  onContactLead,
+  onEditLead,
+  onDeleteLead,
+  isLoading = false
+}: LeadTableProps) {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "new":
@@ -44,12 +51,29 @@ export default function LeadTable({ leads, onContactLead }: LeadTableProps) {
     return "text-muted-foreground";
   };
 
+  const allSelected = leads.length > 0 && selectedLeads.length === leads.length;
+  const someSelected = selectedLeads.length > 0 && selectedLeads.length < leads.length;
+
   return (
     <Card className="overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead className="bg-muted/50 border-b border-card-border">
             <tr>
+              {onSelectLead && (
+                <th className="px-4 py-3 w-10">
+                  <Checkbox
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el && 'indeterminate' in el) {
+                        (el as any).indeterminate = someSelected;
+                      }
+                    }}
+                    onCheckedChange={(checked) => onSelectAll?.(!!checked)}
+                    data-testid="select-all-leads"
+                  />
+                </th>
+              )}
               <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Lead
               </th>
@@ -71,9 +95,29 @@ export default function LeadTable({ leads, onContactLead }: LeadTableProps) {
             </tr>
           </thead>
           <tbody className="divide-y divide-card-border">
-            {leads.map((lead) => (
-              <tr key={lead.id} className="hover-elevate" data-testid={`lead-row-${lead.id}`}>
-                <td className="px-4 py-3">
+            {leads.length === 0 ? (
+              <tr>
+                <td colSpan={onSelectLead ? 7 : 6} className="px-4 py-8 text-center text-muted-foreground">
+                  {isLoading ? "Loading leads..." : "No leads found"}
+                </td>
+              </tr>
+            ) : (
+              leads.map((lead) => {
+                const leadId = lead._id || '';
+                const isSelected = selectedLeads.includes(leadId);
+                
+                return (
+                  <tr key={leadId} className={`hover-elevate ${isSelected ? 'bg-muted/30' : ''}`} data-testid={`lead-row-${leadId}`}>
+                    {onSelectLead && (
+                      <td className="px-4 py-3">
+                        <Checkbox
+                          checked={isSelected}
+                          onCheckedChange={(checked) => onSelectLead(leadId, !!checked)}
+                          data-testid={`select-lead-${leadId}`}
+                        />
+                      </td>
+                    )}
+                    <td className="px-4 py-3">
                   <div className="flex items-center gap-3">
                     <Avatar className="h-8 w-8">
                       <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
@@ -120,19 +164,46 @@ export default function LeadTable({ leads, onContactLead }: LeadTableProps) {
                     {lead.lastContactedAt ? format(lead.lastContactedAt, "MMM d, yyyy") : "Never"}
                   </span>
                 </td>
-                <td className="px-4 py-3">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onContactLead?.(lead.id)}
-                    data-testid={`button-contact-${lead.id}`}
-                  >
-                    <MessageSquare className="h-4 w-4 mr-2" />
-                    Contact
-                  </Button>
-                </td>
-              </tr>
-            ))}
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        {onContactLead && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => onContactLead(leadId)}
+                            data-testid={`button-contact-${leadId}`}
+                          >
+                            <MessageSquare className="h-4 w-4 mr-1" />
+                            Contact
+                          </Button>
+                        )}
+                        {onEditLead && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => onEditLead(lead)}
+                            data-testid={`button-edit-${leadId}`}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                        )}
+                        {onDeleteLead && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => onDeleteLead(leadId)}
+                            data-testid={`button-delete-${leadId}`}
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>

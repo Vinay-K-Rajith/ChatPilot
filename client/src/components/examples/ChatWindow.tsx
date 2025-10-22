@@ -24,7 +24,7 @@ export default function ChatWindowExample() {
 
   return (
     <div className="w-full max-w-2xl h-[600px]">
-      <ChatWindow messages={mockMessages} leadName="Sarah Johnson" />
+      <ChatWindow phoneNumber="+1234567890" />
     </div>
   );
 }

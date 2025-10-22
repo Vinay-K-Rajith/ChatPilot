@@ -2,106 +2,141 @@ import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Send, Bot } from "lucide-react";
+import { Send, Bot, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 interface Message {
-  id: string;
+  role: "user" | "assistant";
   content: string;
-  sender: "user" | "ai";
   timestamp: Date;
 }
 
 interface ChatWindowProps {
-  messages: Message[];
-  leadName: string;
-  onSendMessage?: (message: string) => void;
+  phoneNumber: string;
 }
 
-export default function ChatWindow({ messages, leadName, onSendMessage }: ChatWindowProps) {
+export default function ChatWindow({ phoneNumber }: ChatWindowProps) {
   const [newMessage, setNewMessage] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
+
+  // Query for chat history
+  const { data: chatHistory, isLoading } = useQuery({
+    queryKey: ['chatHistory', phoneNumber],
+    queryFn: async () => {
+      const response = await fetch(`/api/chat-history/${phoneNumber}`);
+      if (!response.ok) throw new Error('Failed to fetch chat history');
+      return response.json();
+    },
+    refetchInterval: 3000 // Refresh every 3 seconds
+  });
+
+  // Mutation for sending messages
+  const sendMessage = useMutation({
+    mutationKey: ['sendMessage', phoneNumber],
+    mutationFn: async (content: string) => {
+      const response = await fetch(`/api/webhook/twilio`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          From: phoneNumber,
+          Body: content
+        })
+      });
+      if (!response.ok) throw new Error('Failed to send message');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chatHistory', phoneNumber] });
+    }
+  });
 
   const handleSend = () => {
     if (newMessage.trim()) {
-      onSendMessage?.(newMessage);
+      sendMessage.mutate(newMessage.trim());
       setNewMessage("");
     }
   };
 
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory?.messages]);
+
+  if (isLoading) {
+    return (
+      <Card className="flex flex-col h-[600px] items-center justify-center">
+        <p>Loading chat history...</p>
+      </Card>
+    );
+  }
+
   return (
-    <Card className="flex flex-col h-full">
-      <div className="p-4 border-b border-card-border">
-        <div className="flex items-center gap-3">
-          <Avatar className="h-10 w-10">
-            <AvatarFallback className="bg-primary/10 text-primary font-medium">
-              {leadName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
-            </AvatarFallback>
-          </Avatar>
-          <div>
-            <h3 className="font-medium">{leadName}</h3>
-            <p className="text-xs text-muted-foreground">Active now</p>
-          </div>
+    <Card className="flex flex-col h-[600px]">
+      <div className="flex items-center gap-3 p-4 border-b">
+        <Avatar className="h-10 w-10">
+          <AvatarFallback className="bg-primary/10">
+            <User className="h-4 w-4" />
+          </AvatarFallback>
+        </Avatar>
+        <div>
+          <h3 className="font-medium">{chatHistory?.metadata?.customerName || phoneNumber}</h3>
+          <p className="text-sm text-muted-foreground">
+            {chatHistory?.metadata?.labels?.[0] || 'Active'}
+          </p>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="chat-messages">
-        {messages.map((message) => (
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {chatHistory?.messages.map((message: Message, index: number) => (
           <div
-            key={message.id}
+            key={index}
             className={cn(
               "flex gap-3",
-              message.sender === "user" ? "justify-end" : "justify-start"
+              message.role === "user" && "justify-end"
             )}
           >
-            {message.sender === "ai" && (
+            {message.role === "assistant" && (
               <Avatar className="h-8 w-8">
-                <AvatarFallback className="bg-primary text-primary-foreground">
+                <AvatarFallback className="bg-primary/10">
                   <Bot className="h-4 w-4" />
                 </AvatarFallback>
               </Avatar>
             )}
             <div
               className={cn(
-                "rounded-lg px-4 py-2 max-w-[70%]",
-                message.sender === "user"
+                "rounded-lg px-3 py-2 max-w-[80%]",
+                message.role === "user"
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted"
               )}
             >
               <p className="text-sm">{message.content}</p>
-              <p className={cn(
-                "text-xs mt-1",
-                message.sender === "user" ? "text-primary-foreground/70" : "text-muted-foreground"
-              )}>
-                {format(message.timestamp, "HH:mm")}
+              <p className="text-xs opacity-50 mt-1">
+                {format(new Date(message.timestamp), "p")}
               </p>
             </div>
-            {message.sender === "user" && (
-              <Avatar className="h-8 w-8">
-                <AvatarFallback className="bg-primary/10 text-primary font-medium">
-                  {leadName.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
-                </AvatarFallback>
-              </Avatar>
-            )}
           </div>
         ))}
+        <div ref={messagesEndRef} />
       </div>
 
-      <div className="p-4 border-t border-card-border">
-        <div className="flex gap-2">
-          <Input
-            placeholder="Type a message..."
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && handleSend()}
-            data-testid="input-message"
-          />
-          <Button onClick={handleSend} size="icon" data-testid="button-send-message">
-            <Send className="h-4 w-4" />
-          </Button>
-        </div>
+      <div className="p-4 border-t flex gap-2">
+        <Input
+          placeholder="Type your message..."
+          value={newMessage}
+          onChange={(e) => setNewMessage(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSend()}
+          className="flex-1"
+        />
+        <Button 
+          onClick={handleSend} 
+          disabled={sendMessage.isPending}
+        >
+          <Send className="h-4 w-4" />
+        </Button>
       </div>
     </Card>
   );
