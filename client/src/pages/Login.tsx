@@ -22,17 +22,34 @@ export default function Login() {
 
   useEffect(() => {
     if (isAuthed()) {
-      navigate("/");
+      navigate("/dashboard");
     }
   }, [navigate]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (username === "crm" && password === "123") {
+    setError(null);
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to login');
+      }
+
       localStorage.setItem("auth", "true");
-      navigate("/");
-    } else {
-      setError("Invalid credentials");
+      localStorage.setItem("token", data.token);
+      navigate("/dashboard");
+    } catch (err: any) {
+      setError(err.message || 'Failed to login');
     }
   }
 

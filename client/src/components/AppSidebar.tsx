@@ -9,7 +9,9 @@ import {
   Settings,
   Bot,
   TestTube,
+  LogOut,
 } from "lucide-react";
+import { logout } from "@/lib/auth";
 import { useLocation, Link } from "wouter";
 import {
   Sidebar,
@@ -23,10 +25,17 @@ import {
   SidebarHeader,
 } from "@/components/ui/sidebar";
 
-const menuItems = [
+interface MenuItem {
+  title: string;
+  url?: string;
+  icon: React.ComponentType<any>;
+  onClick?: () => void;
+}
+
+const menuItems: MenuItem[] = [
   {
     title: "Dashboard",
-    url: "/",
+    url: "/dashboard",
     icon: LayoutDashboard,
   },
   {
@@ -54,9 +63,9 @@ const menuItems = [
     url: "/knowledge",
     icon: BookOpen,
   },
-];
+] as const;
 
-const settingsItems = [
+const settingsItems: MenuItem[] = [
   {
     title: "AI Settings",
     url: "/ai-settings",
@@ -67,7 +76,12 @@ const settingsItems = [
     url: "/testing",
     icon: TestTube,
   },
-];
+  {
+    title: "Logout",
+    onClick: logout,
+    icon: LogOut,
+  },
+] as const;
 
 export default React.memo(function AppSidebar() {
   const [location] = useLocation();
@@ -93,10 +107,21 @@ export default React.memo(function AppSidebar() {
               {menuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
+                    {item.url ? (
+                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    ) : (
+                      <button 
+                        onClick={item.onClick} 
+                        data-testid={`button-${item.title.toLowerCase().replace(' ', '-')}`}
+                        className="flex items-center gap-3 w-full px-3 py-2"
+                      >
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </button>
+                    )}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
@@ -110,10 +135,21 @@ export default React.memo(function AppSidebar() {
               {settingsItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild isActive={location === item.url}>
-                    <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
+                    {item.url ? (
+                      <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(' ', '-')}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    ) : (
+                      <button 
+                        onClick={item.onClick} 
+                        data-testid={`button-${item.title.toLowerCase().replace(' ', '-')}`}
+                        className="flex items-center gap-3 w-full px-3 py-2"
+                      >
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </button>
+                    )}
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}

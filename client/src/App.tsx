@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -7,6 +8,7 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import AppSidebar from "@/components/AppSidebar";
 import ThemeToggle from "@/components/ThemeToggle";
 import Login from "@/pages/Login";
+import Landing from "@/pages/Landing";
 import Dashboard from "@/pages/Dashboard";
 import Conversations from "@/pages/Conversations";
 import Leads from "@/pages/Leads";
@@ -17,14 +19,40 @@ import AISettings from "@/pages/AISettings";
 import Testing from "@/pages/Testing";
 import NotFound from "@/pages/not-found";
 
-function isAuthed() {
-  return typeof window !== "undefined" && localStorage.getItem("auth") === "true";
-}
+import { isAuthed, validateSession } from "./lib/auth";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
-  if (!isAuthed()) {
+  const [isLoading, setIsLoading] = useState(true);
+  const [isValidSession, setIsValidSession] = useState(true);
+
+  useEffect(() => {
+    async function checkSession() {
+      if (!isAuthed()) {
+        setIsValidSession(false);
+        setIsLoading(false);
+        return;
+      }
+
+      const isValid = await validateSession();
+      setIsValidSession(isValid);
+      setIsLoading(false);
+    }
+
+    checkSession();
+  }, []);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center">
+        <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  if (!isValidSession) {
     return <Redirect to="/login" />;
   }
+
   return <Component />;
 }
 
@@ -32,7 +60,8 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={Login} />
-      <Route path="/" component={() => <ProtectedRoute component={Dashboard} />} />
+      <Route path="/" component={Landing} />
+      <Route path="/dashboard" component={() => <ProtectedRoute component={Dashboard} />} />
       <Route path="/conversations" component={() => <ProtectedRoute component={Conversations} />} />
       <Route path="/leads" component={() => <ProtectedRoute component={Leads} />} />
       <Route path="/campaigns" component={() => <ProtectedRoute component={Campaigns} />} />
@@ -55,7 +84,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <SidebarProvider style={style as React.CSSProperties}>
-          {location === "/login" ? (
+          {location === "/login" || location === "/" ? (
             <main className="min-h-screen w-full bg-background">
               <Router />
             </main>

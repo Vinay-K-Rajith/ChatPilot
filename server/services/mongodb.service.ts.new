@@ -1,0 +1,503 @@
+import { MongoClient, Collection, ObjectId } from 'mongodb';
+import * as dotenv from 'dotenv';
+import type { ChatHistory } from '../interfaces/chat.interface';
+import type { Lead, LeadFilters, PaginationOptions } from '../../shared/models/lead';
+import type { 
+  KnowledgeQuery, 
+  CreateArticleData, 
+  UpdateArticleData,
+  LegacyArticle,
+  CreateLegacyArticleData,
+  UpdateLegacyArticleData,
+  DatabaseLegacyArticle
+} from '../../shared/knowledge';
+import { databaseToLegacyArticle } from '../../shared/knowledge';
+import type {
+  ServerCampaign,
+  Campaign,
+  CreateCampaignData,
+  UpdateCampaignData,
+  CampaignFilters,
+  CampaignPagination,
+  CampaignStats
+} from '../../shared/models/campaign';
+
+dotenv.config();
+
+// Types for MongoDB service
+type MongoDBCollections = {
+  customers?: Collection<Customer>;
+  products?: Collection<Product>;
+  legacyArticles?: Collection<ServerLegacyArticle>;
+  legacyKnowledgeBase?: Collection<LegacyKnowledgeBase>;
+  leads?: Collection<ServerLead>;
+  campaigns?: Collection<ServerCampaign>;
+  chatHistory?: Collection<ChatHistory>;
+  gmt_cust?: Collection<GMTCustomer>;
+  gmt_otp?: Collection<OTPRecord>;
+};
+
+// Define interfaces for our data models
+export interface Customer {
+  phone: string;
+  lastContact: Date;
+  conversationHistory: Array<{
+    role: string;
+    content: string;
+  }>;
+}
+
+export interface GMTCustomer {
+  _id?: ObjectId;
+  name: string;
+  phone: string;
+  lastLogin: Date;
+  createdAt?: Date;
+}
+
+export interface OTPRecord {
+  _id?: ObjectId;
+  phone: string;
+  otp: string;
+  name: string;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+export interface Product {
+  name: string;
+  description: string;
+  price: number;
+}
+
+// Legacy interface for backward compatibility
+export interface LegacyKnowledgeBase {
+  query: string;
+  content: string;
+}
+
+// Server-side Lead type with proper ObjectId
+export interface ServerLead extends Omit<Lead, '_id'> {
+  _id?: ObjectId;
+}
+
+// Interface for legacy articles (GMT_KB) - compatible with existing database
+export interface ServerLegacyArticle {
+  _id?: ObjectId;
+  title?: string;  // Old structure (existing data)
+  query?: string;  // New structure
+  content: string;
+  category?: string;
+}
+
+/**
+ * MongoDB Service - Singleton implementation for MongoDB database operations
+ */
+export class MongoDBService {
+  private static instance: MongoDBService | null = null;
+  private client: MongoClient;
+  private dbName: string;
+  private collections: MongoDBCollections = {};
+  private isConnected = false;
+
+  private constructor() {
+    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+    this.dbName = process.env.MONGODB_DB_NAME || 'test';
+    this.client = new MongoClient(uri);
+  }
+
+  public static getInstance(): MongoDBService {
+    if (!MongoDBService.instance) {
+      MongoDBService.instance = new MongoDBService();
+    }
+    return MongoDBService.instance;
+  }
+
+  private async ensureConnected(): Promise<void> {
+    if (!this.client) {
+      throw new Error('MongoDB client is not initialized');
+    }
+    if (this.isConnected) return;
+
+    try {
+      await this.client.connect();
+      const db = this.client.db(this.dbName);
+      
+      // Initialize collections
+      this.collections = {
+        customers: db.collection<Customer>('GMT_KB_customers'),
+        products: db.collection<Product>('GMT_KB_products'),
+        legacyArticles: db.collection<ServerLegacyArticle>('GMT_KB'),
+        legacyKnowledgeBase: db.collection<LegacyKnowledgeBase>('GMT_KB'),
+        chatHistory: db.collection<ChatHistory>('GMT_CH'),
+        leads: db.collection<ServerLead>('GMT_Leads'),
+        campaigns: db.collection<ServerCampaign>('Campaigns'),
+        gmt_cust: db.collection<GMTCustomer>('GMT_Cust'),
+        gmt_otp: db.collection<OTPRecord>('GMT_OTP')
+      };
+
+      // Create indexes for chat history
+      await this.collections.chatHistory?.createIndex({ phoneNumber: 1 });
+      await this.collections.chatHistory?.createIndex({ lastInteraction: 1 });
+      await this.collections.chatHistory?.createIndex({ "metadata.labels": 1 });
+
+      // Create indexes for legacy articles (GMT_KB)
+      await this.collections.legacyArticles?.createIndex({ title: 1 });
+      await this.collections.legacyArticles?.createIndex({ category: 1 });
+      
+      // Handle text search index - drop and recreate if exists with different options
+      try {
+        await this.collections.legacyArticles?.createIndex({ 
+          title: "text",
+          content: "text", 
+          category: "text"
+        }, { name: "articles_text_search" });
+      } catch (error: any) {
+        if (error.code === 85) { // IndexOptionsConflict
+          console.log('Dropping existing text search index and recreating...');
+          await this.collections.legacyArticles?.dropIndex("articles_text_search");
+          await this.collections.legacyArticles?.createIndex({ 
+            title: "text",
+            content: "text", 
+            category: "text"
+          }, { name: "articles_text_search" });
+        } else {
+          throw error;
+        }
+      }
+      
+      // Create indexes for leads
+      await this.collections.leads?.createIndex({ phone: 1 }, { unique: true });
+      await this.collections.leads?.createIndex({ email: 1 });
+      await this.collections.leads?.createIndex({ status: 1 });
+      await this.collections.leads?.createIndex({ engagementScore: 1 });
+      await this.collections.leads?.createIndex({ lastContactedAt: 1 });
+      await this.collections.leads?.createIndex({ createdAt: 1 });
+      
+      // Create indexes for campaigns
+      await this.collections.campaigns?.createIndex({ status: 1 });
+      await this.collections.campaigns?.createIndex({ type: 1 });
+      await this.collections.campaigns?.createIndex({ createdBy: 1 });
+      await this.collections.campaigns?.createIndex({ scheduledAt: 1 });
+      await this.collections.campaigns?.createIndex({ createdAt: 1 });
+      await this.collections.campaigns?.createIndex({ 
+        name: "text", 
+        template: "text" 
+      }, { name: "campaigns_text_search" });
+      
+      // Create indexes for GMT_Cust
+      await this.collections.gmt_cust?.createIndex({ phone: 1 }, { unique: true });
+      await this.collections.gmt_cust?.createIndex({ lastLogin: 1 });
+      await this.collections.gmt_cust?.createIndex({ createdAt: 1 });
+
+      // Create indexes for GMT_OTP
+      await this.collections.gmt_otp?.createIndex({ phone: 1 });
+      await this.collections.gmt_otp?.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+      this.isConnected = true;
+      console.log('Connected to MongoDB');
+    } catch (error) {
+      console.error('Error connecting to MongoDB:', error);
+      throw error;
+    }
+  }
+
+  public async connect(): Promise<this> {
+    await this.ensureConnected();
+    return this;
+  }
+
+  public async disconnect(): Promise<void> {
+    if (this.client) {
+      await this.client.close();
+      this.isConnected = false;
+    }
+  }
+
+  // Customer Methods
+  public async findCustomerByPhone(phone: string): Promise<Customer | null> {
+    await this.ensureConnected();
+    if (!this.collections.customers) {
+      throw new Error('Customers collection is not initialized');
+    }
+    return this.collections.customers.findOne({ phone });
+  }
+
+  public async saveCustomer(customer: Customer): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.customers) {
+      throw new Error('Customers collection is not initialized');
+    }
+    await this.collections.customers.insertOne(customer);
+  }
+
+  public async updateConversation(phone: string, messages: Array<{role: string, content: string}>): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.customers) {
+      throw new Error('Customers collection is not initialized');
+    }
+    await this.collections.customers.updateOne(
+      { phone },
+      { 
+        $push: { 
+          conversationHistory: { 
+            $each: messages 
+          } 
+        },
+        $set: { lastContact: new Date() }
+      }
+    );
+  }
+
+  public async getInactiveCustomers(days: number): Promise<Customer[]> {
+    await this.ensureConnected();
+    if (!this.collections.customers) {
+      throw new Error('Customers collection is not initialized');
+    }
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    
+    return this.collections.customers.find({
+      lastContact: { $lt: cutoffDate }
+    }).toArray();
+  }
+
+  public async updateLastContact(phone: string): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.customers) {
+      throw new Error('Customers collection is not initialized');
+    }
+    await this.collections.customers.updateOne(
+      { phone },
+      { $set: { lastContact: new Date() } }
+    );
+  }
+
+  // Product Methods
+  public async getProductsToPromote(): Promise<Product[]> {
+    await this.ensureConnected();
+    if (!this.collections.products) {
+      throw new Error('Products collection is not initialized');
+    }
+    return this.collections.products.find().toArray();
+  }
+
+  // GMT Customer Methods
+  public async createOrUpdateCustomer(customer: Omit<GMTCustomer, '_id' | 'createdAt'>): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.gmt_cust) {
+      throw new Error('GMT_Cust collection is not initialized');
+    }
+    const now = new Date();
+    await this.collections.gmt_cust.updateOne(
+      { phone: customer.phone },
+      { 
+        $set: { 
+          ...customer,
+          lastLogin: now
+        },
+        $setOnInsert: {
+          createdAt: now
+        }
+      },
+      { upsert: true }
+    );
+  }
+
+  public async getCustomerByPhone(phone: string): Promise<GMTCustomer | null> {
+    await this.ensureConnected();
+    if (!this.collections.gmt_cust) {
+      throw new Error('GMT_Cust collection is not initialized');
+    }
+    return this.collections.gmt_cust.findOne({ phone });
+  }
+
+  // OTP Methods
+  public async storeOTP(phone: string, otp: string, name: string): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.gmt_otp) {
+      throw new Error('GMT_OTP collection is not initialized');
+    }
+    await this.collections.gmt_otp.insertOne({
+      phone,
+      otp,
+      name,
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // OTP expires in 10 minutes
+    });
+  }
+
+  public async verifyOTP(phone: string, otp: string): Promise<boolean> {
+    await this.ensureConnected();
+    if (!this.collections.gmt_otp) {
+      throw new Error('GMT_OTP collection is not initialized');
+    }
+    const record = await this.collections.gmt_otp.findOne({
+      phone,
+      otp,
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (record) {
+      await this.collections.gmt_otp.deleteOne({ _id: record._id });
+      return true;
+    }
+    return false;
+  }
+
+  // Chat History Methods
+  public async getChatHistory(phone: string): Promise<ChatHistory[]> {
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) {
+      throw new Error('ChatHistory collection is not initialized');
+    }
+    return this.collections.chatHistory.find({ phone }).toArray();
+  }
+
+  public async storeChatMessage(chat: Omit<ChatHistory, 'createdAt'>): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) {
+      throw new Error('ChatHistory collection is not initialized');
+    }
+    await this.collections.chatHistory.insertOne({
+      ...chat,
+      lastInteraction: new Date()
+    });
+  }
+
+  // Legacy Article Methods
+  public async getRelevantKnowledge(query: string): Promise<string> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) {
+      throw new Error('Legacy articles collection is not initialized');
+    }
+    
+    if (!query || query.trim().length === 0) return '';
+
+    try {
+      // Search articles using text search
+      const articleResults = await this.collections.legacyArticles.find({
+        $text: { $search: query }
+      }).sort({ score: { $meta: "textScore" } }).limit(10).toArray();
+
+      // If text search doesn't work, fallback to regex search
+      let results = articleResults;
+      if (results.length === 0) {
+        const words = query.toLowerCase().split(/\W+/).filter(word => word.length > 3);
+        if (words.length > 0) {
+          const regexPatterns = words.map(word => new RegExp(word, 'i'));
+          results = await this.collections.legacyArticles.find({
+            $or: [
+              ...regexPatterns.map(pattern => ({ title: pattern })),
+              ...regexPatterns.map(pattern => ({ content: pattern }))
+            ]
+          }).limit(5).toArray();
+        }
+      }
+      
+      return results.map(item => item.content).join('\n\n');
+    } catch (error) {
+      console.error('Error in getRelevantKnowledge:', error);
+      return '';
+    }
+  }
+
+  public async createLegacyArticle(articleData: CreateLegacyArticleData): Promise<any> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) {
+      throw new Error('Legacy articles collection is not initialized');
+    }
+    
+    const article = {
+      title: articleData.title,
+      content: articleData.content,
+      category: articleData.category,
+    };
+    
+    const result = await this.collections.legacyArticles.insertOne(article as ServerLegacyArticle);
+    return { ...article, _id: result.insertedId.toString() };
+  }
+
+  public async getLegacyArticles(query: { search?: string; category?: string; page?: number; limit?: number }): Promise<{
+    articles: any[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) {
+      throw new Error('Legacy articles collection is not initialized');
+    }
+    
+    const { page = 1, limit = 20, search, category } = query;
+    const skip = (page - 1) * limit;
+    
+    const filter: any = {};
+    if (category) {
+      filter.category = category;
+    }
+    
+    let articles: any[];
+    let total: number;
+    
+    if (search && search.trim().length > 0) {
+      const searchFilter = {
+        ...filter,
+        $text: { $search: search }
+      };
+      
+      const [searchResults, searchTotal] = await Promise.all([
+        this.collections.legacyArticles
+          .find(searchFilter)
+          .sort({ score: { $meta: "textScore" } })
+          .skip(skip)
+          .limit(limit)
+          .toArray(),
+        this.collections.legacyArticles.countDocuments(searchFilter)
+      ]);
+      
+      articles = searchResults;
+      total = searchTotal;
+    } else {
+      const [regularResults, regularTotal] = await Promise.all([
+        this.collections.legacyArticles
+          .find(filter)
+          .skip(skip)
+          .limit(limit)
+          .toArray(),
+        this.collections.legacyArticles.countDocuments(filter)
+      ]);
+      
+      articles = regularResults;
+      total = regularTotal;
+    }
+    
+    const articlesWithStringIds = articles.map(article => {
+      const converted = databaseToLegacyArticle({
+        _id: article._id?.toString() || '',
+        title: article.title,
+        content: article.content,
+        category: article.category
+      });
+      return {
+        ...converted,
+        _id: article._id?.toString(),
+        type: 'article', // Add type field for frontend compatibility
+        title: article.title,
+        uploadedAt: new Date() // Add upload date
+      };
+    });
+    
+    return {
+      articles: articlesWithStringIds,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit)
+    };
+  }
+}
+
+// Export singleton instance
+export default MongoDBService.getInstance();

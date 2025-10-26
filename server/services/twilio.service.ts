@@ -48,10 +48,12 @@ export class TwilioService {
 
   public async sendMessage(to: string, message: string): Promise<boolean> {
     try {
+      const fromAddr = this.phoneNumber.startsWith('whatsapp:') ? this.phoneNumber : `whatsapp:${this.phoneNumber}`;
+      const toAddr = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
       const result = await this.client.messages.create({
         body: message,
-        from: this.phoneNumber,
-        to: to
+        from: fromAddr,
+        to: toAddr,
       });
 
       console.log(`Message sent successfully. SID: ${result.sid}`);
@@ -65,12 +67,13 @@ export class TwilioService {
   public async handleIncomingMessage(from: string, message: string): Promise<void> {
     try {
       console.log(`Received message from ${from}: ${message}`);
+      const e164 = from.replace('whatsapp:', '');
       
-      // Store user message in chat history
-      await this.mongodbService.addMessageToChatHistory(from, 'user', message);
+      // Store user message in chat history (store without whatsapp: prefix)
+      await this.mongodbService.addMessageToChatHistory(e164, 'user', message);
 
       // Get chat history for context
-      const chatHistory = await this.mongodbService.getChatHistory(from);
+      const chatHistory = await this.mongodbService.getChatHistory(e164);
       const conversationHistory = chatHistory?.messages || [];
 
       // Get relevant knowledge base context
@@ -84,10 +87,10 @@ export class TwilioService {
       );
 
       // Store AI response in chat history
-      await this.mongodbService.addMessageToChatHistory(from, 'assistant', aiResponse);
+      await this.mongodbService.addMessageToChatHistory(e164, 'assistant', aiResponse);
 
-      // Send AI response back to customer
-      await this.sendMessage(from, aiResponse);
+      // Send AI response back to customer (ensure proper whatsapp: addressing)
+      await this.sendMessage(e164, aiResponse);
 
     } catch (error) {
       console.error('Error handling incoming message:', error);

@@ -32,15 +32,17 @@ export function ApiDebugger() {
         const data = await safeFetch(url);
         setResult(prev => prev + 'Safe fetch successful!\n');
         setResult(prev => prev + `Data preview: ${JSON.stringify(data).substring(0, 200)}...\n`);
-      } catch (error) {
-        setResult(prev => prev + `Safe fetch error: ${error.message}\n`);
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        setResult(prev => prev + `Safe fetch error: ${msg}\n`);
       }
 
       // Run full diagnosis
       await diagnoseApiIssue(url);
       
-    } catch (error) {
-      setResult(prev => prev + `Error: ${error.message}\n`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setResult(prev => prev + `Error: ${msg}\n`);
     } finally {
       setIsLoading(false);
     }

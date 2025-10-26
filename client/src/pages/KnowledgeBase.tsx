@@ -66,8 +66,8 @@ export default function KnowledgeBase() {
     // Convert KnowledgeDocument to LegacyArticle for editing
     const legacyArticle: LegacyArticle = {
       _id: document._id,
-      query: document.query || document.title || '', // Handle both old and new structure
-      content: document.content || '',
+      title: document.title || '',
+      content: document.content || document.extractedText || '',
       category: document.category
     };
     setEditingArticle(legacyArticle);

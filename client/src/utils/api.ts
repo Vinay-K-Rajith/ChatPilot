@@ -53,11 +53,12 @@ export async function safeJsonResponse<T = any>(response: Response): Promise<T> 
   
   try {
     return await response.json();
-  } catch (parseError) {
+  } catch (parseError: unknown) {
     const text = await response.text();
+    const msg = parseError instanceof Error ? parseError.message : String(parseError);
     
     const error = new Error(
-      `Failed to parse JSON response: ${parseError.message}\n` +
+      `Failed to parse JSON response: ${msg}\n` +
       `Raw response: ${text.substring(0, 200)}...`
     ) as ApiError;
     

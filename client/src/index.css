@@ -352,3 +352,62 @@
 .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: rgba(75, 85, 99, 0.7);
 }
+
+/* Landing page enhancements */
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-12px); }
+}
+
+.gradient-animated {
+  background: linear-gradient(120deg, #0ea5e9, #8b5cf6, #ec4899, #14b8a6);
+  background-size: 300% 300%;
+  animation: gradientShift 12s ease infinite;
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #67e8f9, #60a5fa);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.dark .glass {
+  background: rgba(17, 25, 40, 0.6);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(50px);
+  opacity: .5;
+}
+
+.orb-1 { width: 420px; height: 420px; background: radial-gradient(circle at 30% 30%, #60a5fa, transparent 60%); animation: float 10s ease-in-out infinite; }
+.orb-2 { width: 360px; height: 360px; background: radial-gradient(circle at 70% 70%, #a78bfa, transparent 60%); animation: float 12s ease-in-out infinite; animation-delay: -3s; }
+.orb-3 { width: 300px; height: 300px; background: radial-gradient(circle at 50% 50%, #34d399, transparent 60%); animation: float 14s ease-in-out infinite; animation-delay: -6s; }
+
+.backdrop-blur-glass {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Radial center glow for hero */
+.radial-bg {
+  background: radial-gradient(60% 50% at 50% 30%, rgba(255,255,255,0.06), rgba(0,0,0,0) 60%);
+}

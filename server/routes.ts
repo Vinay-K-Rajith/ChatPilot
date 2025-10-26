@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import path from "path";
@@ -17,6 +17,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const twilioService = TwilioService.getInstance();
 
   await twilioService.initialize();
+
+  // Authentication endpoints
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const { username, password } = req.body;
+      if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password are required' });
+      }
+
+      // Here you'd typically check against a database
+      // For now using hardcoded values to match frontend
+      if (username === 'crm' && password === '123') {
+        // In a real app, you'd generate a JWT token here
+        const token = 'dummy-token';
+        res.json({ token });
+      } else {
+        res.status(401).json({ error: 'Invalid credentials' });
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      res.status(500).json({ error: 'Failed to process login' });
+    }
+  });
+
+  app.get('/api/auth/session', async (req, res) => {
+    try {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) {
+        return res.status(401).json({ error: 'No token provided' });
+      }
+
+      // Here you'd typically validate the JWT token
+      // For now just checking if it exists
+      if (token === 'dummy-token') {
+        res.json({ valid: true });
+      } else {
+        res.status(401).json({ error: 'Invalid token' });
+      }
+    } catch (error) {
+      console.error('Session validation error:', error);
+      res.status(500).json({ error: 'Failed to validate session' });
+    }
+  });
+
+  // Public chat endpoint (for landing page)
+  app.post('/api/chat', async (req, res) => {
+    try {
+      const { message } = req.body;
+      if (!message) {
+        return res.status(400).json({ error: 'Message is required' });
+      }
+
+      // Get response from knowledge base
+      const response = await openaiService.generateFromKnowledgeBase(message);
+      res.json({ response });
+    } catch (error) {
+      console.error('Chat error:', error);
+      res.status(500).json({ error: 'Failed to process chat message' });
+    }
+  });
+
+  // Request OTP endpoint
+  app.post('/api/request-otp', async (req, res) => {
+    try {
+      const { phone, name } = req.body;
+      if (!phone || !name) {
+        return res.status(400).json({ error: 'Phone and name are required' });
+      }
+
+      // Generate a random 6-digit OTP
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      
+      // Store the OTP and user info temporarily (you might want to use Redis in production)
+      await mongodbService.storeOTP(phone, otp, name);
+      
+      // Send OTP via Twilio
+      await twilioService.sendMessage(phone, `Your ChatPilot verification code is: ${otp}`);
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error('OTP request error:', error);
+      res.status(500).json({ error: 'Failed to send OTP' });
+    }
+  });
+
+  // Verify OTP endpoint
+  app.post('/api/verify-otp', async (req, res) => {
+    try {
+      const { phone, name, otp } = req.body;
+      if (!phone || !name || !otp) {
+        return res.status(400).json({ error: 'Phone, name and OTP are required' });
+      }
+
+      // Verify OTP
+      const isValid = await mongodbService.verifyOTP(phone, otp);
+      if (!isValid) {
+        return res.status(400).json({ error: 'Invalid OTP' });
+      }
+
+      // Store user in GMT_Cust collection
+      await mongodbService.createOrUpdateCustomer({
+        phone,
+        name,
+        lastLogin: new Date(),
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error('OTP verification error:', error);
+      res.status(500).json({ error: 'Failed to verify OTP' });
+    }
+  });
 
   // Configure multer for file uploads
   const uploadDir = path.join(process.cwd(), 'public', 'uploads', 'campaigns');
@@ -57,7 +169,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Chat history endpoints
-  app.get('/api/chat-history/:phoneNumber', async (req: any, res: any) => {
+  app.get('/api/chat-history/:phoneNumber', async (req: Request<{phoneNumber: string}>, res: Response) => {
     try {
       const { phoneNumber } = req.params;
       const history = await mongodbService.getChatHistory(phoneNumber);
@@ -68,7 +180,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/chat-history', async (req: any, res: any) => {
+  app.get('/api/chat-history', async (req: Request<{}, {}, {}, {limit?: string; skip?: string}>, res: Response) => {
     try {
       const limit = Number(req.query.limit) || 20;
       const skip = Number(req.query.skip) || 0;
@@ -80,7 +192,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/chat-history/:phoneNumber/metadata', async (req: any, res: any) => {
+  app.put('/api/chat-history/:phoneNumber/metadata', async (req: Request<{phoneNumber: string}, {}, {metadata: Record<string, unknown>}>, res: Response) => {
     try {
       const { phoneNumber } = req.params;
       const { metadata } = req.body;

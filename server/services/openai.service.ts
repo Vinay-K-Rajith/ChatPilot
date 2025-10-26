@@ -53,7 +53,7 @@ export class OpenAIService {
       const conversationSummary = this.createConversationSummary(conversationHistory);
       
   // Base system rules enforced by the server
-  const baseSystemMessage = `You are an AI assistant specializing EXCLUSIVELY in ${coreTopic}. 
+  const baseSystemMessage = `You are Global Metal Direct's AI assistant (GMD). You have high emotional intelligence—respond with an empathetic, professional tone while staying concise. You are an AI assistant specializing EXCLUSIVELY in ${coreTopic}. 
 
 STRICT BEHAVIOR RULES:
 1. ONLY answer questions related to industrial metal products, services, pricing, specifications, technical support, orders, and industry standards
@@ -80,7 +80,7 @@ ${pdfContext ? `Additional PDF document context:\n\n${pdfContext}\n\n` : ''}
 
 ${conversationSummary ? `Previous conversation context:\n${conversationSummary}\n\n` : ''}
 
-Be professional, helpful, and ALWAYS stay focused on ${coreTopic}. If unsure about relevance, ask clarifying questions about our products or services.`;
+Be professional, helpful, emotionally intelligent, and ALWAYS stay focused on ${coreTopic}. If unsure about relevance, ask clarifying questions about our products or services.`;
 
   // If client provided a systemPrompt, include it after the base rules so it supplements server-side safety
   const systemMessage = systemPrompt ? `${baseSystemMessage}\n\nClient guidance:\n${systemPrompt}` : baseSystemMessage;
@@ -98,7 +98,6 @@ Be professional, helpful, and ALWAYS stay focused on ${coreTopic}. If unsure abo
         model: 'gpt-3.5-turbo',
         messages,
         max_tokens: 500,
-        temperature: 0.7,
       });
       
       const aiResponse = response.choices[0]?.message.content?.trim() || "I'm not sure how to respond to that.";
@@ -170,13 +169,12 @@ Be professional, helpful, and ALWAYS stay focused on ${coreTopic}. If unsure abo
       The message should be friendly, highlight key benefits, and include a call to action.`;
       
       const response = await this.openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+        model: 'gpt-3.5-turbo',
         messages: [
-          { role: "system", content: "You are a marketing specialist." },
+          { role: "system", content: "You are a marketing specialist for Global Metal Direct with high emotional intelligence." },
           { role: "user", content: prompt }
         ],
         max_tokens: 200,
-        temperature: 0.8,
       });
       
       return response.choices[0]?.message.content?.trim() || "Check out our amazing product!";
@@ -184,6 +182,11 @@ Be professional, helpful, and ALWAYS stay focused on ${coreTopic}. If unsure abo
       console.error('Error generating promotion:', error);
       return "Check out our latest offerings!";
     }
+  }
+
+  // Simple helper for routes expecting this name
+  public async generateFromKnowledgeBase(message: string): Promise<string> {
+    return this.generateResponse(message, []);
   }
 }
 
