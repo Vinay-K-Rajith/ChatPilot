@@ -93,7 +93,7 @@ export interface ServerLegacyArticle {
 /**
  * MongoDB Service - Singleton implementation for MongoDB database operations
  */
-class MongoDBService {
+export class MongoDBService {
   private static instance: MongoDBService | null = null;
   private client: MongoClient;
   private dbName: string;
@@ -164,7 +164,17 @@ class MongoDBService {
       await this.collections.campaigns?.createIndex({ createdBy: 1 });
       await this.collections.campaigns?.createIndex({ scheduledAt: 1 });
       await this.collections.campaigns?.createIndex({ createdAt: 1 });
-      await this.collections.campaigns?.createIndex({ name: "text", template: "text" });
+      try {
+        await this.collections.campaigns?.createIndex({ name: "text", template: "text" }, { name: "campaigns_text_search" });
+      } catch (error: any) {
+        if (error && (error.code === 85 || error.codeName === 'IndexOptionsConflict')) {
+          // If index exists with different options, drop and recreate with our options
+          await this.collections.campaigns?.dropIndex("campaigns_text_search");
+          await this.collections.campaigns?.createIndex({ name: "text", template: "text" }, { name: "campaigns_text_search" });
+        } else {
+          throw error;
+        }
+      }
 
       // Create indexes for GMT_Cust
       await this.collections.gmt_cust?.createIndex({ phone: 1 }, { unique: true });
@@ -315,1032 +325,13 @@ class MongoDBService {
       return '';
     }
   }
-}
 
-// Export singleton instance
-export default MongoDBService.getInstance();
-
-// Types for MongoDB service
-type MongoDBCollections = {
-  customers?: Collection<Customer>;
-  products?: Collection<Product>;
-  legacyArticles?: Collection<ServerLegacyArticle>;
-  legacyKnowledgeBase?: Collection<LegacyKnowledgeBase>;
-  leads?: Collection<ServerLead>;
-  campaigns?: Collection<ServerCampaign>;
-  chatHistory?: Collection<ChatHistory>;
-  gmt_cust?: Collection<GMTCustomer>;
-  gmt_otp?: Collection<OTPRecord>;
-};
-
-dotenv.config();
-
-// Define interfaces for our data models
-export interface Customer {
-  phone: string;
-  lastContact: Date;
-  conversationHistory: Array<{
-    role: string;
-    content: string;
-  }>;
-}
-
-export interface GMTCustomer {
-  _id?: ObjectId;
-  name: string;
-  phone: string;
-  lastLogin: Date;
-  createdAt?: Date;
-}
-
-export interface OTPRecord {
-  _id?: ObjectId;
-  phone: string;
-  otp: string;
-  name: string;
-  createdAt: Date;
-  expiresAt: Date;
-}
-
-export interface Product {
-  name: string;
-  description: string;
-  price: number;
-}
-
-// Legacy interface for backward compatibility
-export interface LegacyKnowledgeBase {
-  query: string;
-  content: string;
-}
-
-// Server-side Lead type with proper ObjectId
-export interface ServerLead extends Omit<Lead, '_id'> {
-  _id?: ObjectId;
-}
-
-// Interface for legacy articles (GMT_KB) - compatible with existing database
-export interface ServerLegacyArticle {
-  _id?: ObjectId;
-  title?: string;  // Old structure (existing data)
-  query?: string;  // New structure
-  content: string;
-  category?: string;
-}
-
-// Collection type definitions
-interface Collections {
-  customers: Collection<Customer>;
-  products: Collection<Product>;
-  legacyArticles: Collection<ServerLegacyArticle>;
-  legacyKnowledgeBase: Collection<LegacyKnowledgeBase>;
-  leads: Collection<ServerLead>;
-  campaigns: Collection<ServerCampaign>;
-  chatHistory: Collection<ChatHistory>;
-  gmt_cust: Collection<GMTCustomer>;
-  gmt_otp: Collection<OTPRecord>;
-}
-
-/**
- * MongoDB Service - Singleton implementation for MongoDB database operations
- * Handles all database interactions
- */
-class MongoDBService {
-  private static instance: MongoDBService | null = null;
-  private client: MongoClient;
-  private dbName: string;
-  private collections: MongoDBCollections = {};
-  private isConnected = false;
-
-  private constructor() {
-    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-    this.dbName = process.env.MONGODB_DB_NAME || 'test';
-    this.client = new MongoClient(uri);
-  }
-
-  public static getInstance(): MongoDBService {
-    if (!MongoDBService.instance) {
-      MongoDBService.instance = new MongoDBService();
-    }
-    return MongoDBService.instance;
-  }
-
-  private async ensureConnected(): Promise<void> {
-    if (!this.client) {
-      throw new Error('MongoDB client is not initialized');
-    }
-    if (this.isConnected) return;
-
-    try {
-      await this.client.connect();
-      const db = this.client.db(this.dbName);
-      
-      // Initialize collections
-      this.collections = {
-        customers: db.collection<Customer>('GMT_KB_customers'),
-        products: db.collection<Product>('GMT_KB_products'),
-        legacyArticles: db.collection<ServerLegacyArticle>('GMT_KB'),
-        legacyKnowledgeBase: db.collection<LegacyKnowledgeBase>('GMT_KB'),
-        chatHistory: db.collection<ChatHistory>('GMT_CH'),
-        leads: db.collection<ServerLead>('GMT_Leads'),
-        campaigns: db.collection<ServerCampaign>('Campaigns'),
-        gmt_cust: db.collection<GMTCustomer>('GMT_Cust'),
-        gmt_otp: db.collection<OTPRecord>('GMT_OTP')
-      };
-
-      // Create indexes for chat history
-      await this.collections.chatHistory?.createIndex({ phoneNumber: 1 });
-      await this.collections.chatHistory?.createIndex({ lastInteraction: 1 });
-      await this.collections.chatHistory?.createIndex({ "metadata.labels": 1 });
-
-      // Create indexes for legacy articles (GMT_KB)
-      await this.collections.legacyArticles?.createIndex({ query: 1 });
-      await this.collections.legacyArticles?.createIndex({ category: 1 });
-      await this.collections.legacyArticles?.createIndex({
-        query: "text", 
-        content: "text", 
-        category: "text" 
-      }, { name: "articles_text_search" });
-
-      // Create indexes for leads
-      await this.collections.leads?.createIndex({ phone: 1 }, { unique: true });
-      await this.collections.leads?.createIndex({ email: 1 });
-      await this.collections.leads?.createIndex({ status: 1 });
-      await this.collections.leads?.createIndex({ engagementScore: 1 });
-      await this.collections.leads?.createIndex({ lastContactedAt: 1 });
-      await this.collections.leads?.createIndex({ createdAt: 1 });
-
-      // Create indexes for campaigns
-      await this.collections.campaigns?.createIndex({ status: 1 });
-      await this.collections.campaigns?.createIndex({ type: 1 });
-      await this.collections.campaigns?.createIndex({ createdBy: 1 });
-      await this.collections.campaigns?.createIndex({ scheduledAt: 1 });
-      await this.collections.campaigns?.createIndex({ createdAt: 1 });
-      await this.collections.campaigns?.createIndex({ name: "text", template: "text" });
-
-      // Create indexes for GMT_Cust
-      await this.collections.gmt_cust?.createIndex({ phone: 1 }, { unique: true });
-      await this.collections.gmt_cust?.createIndex({ lastLogin: 1 });
-      await this.collections.gmt_cust?.createIndex({ createdAt: 1 });
-
-      // Create indexes for GMT_OTP
-      await this.collections.gmt_otp?.createIndex({ phone: 1 });
-      await this.collections.gmt_otp?.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
-      this.isConnected = true;
-      console.log('Connected to MongoDB');
-    } catch (error) {
-      console.error('Failed to connect to MongoDB:', error);
-      throw error;
-    }
-  }
-
-  public async connect(): Promise<this> {
-    await this.ensureConnected();
-    return this;
-  }
-
-  public async storeOTP(phone: string, otp: string, name: string): Promise<void> {
-    await this.ensureConnected();
-    if (!this.collections.gmt_otp) {
-      throw new Error('GMT_OTP collection is not initialized');
-    }
-    await this.collections.gmt_otp.insertOne({
-      phone,
-      otp,
-      name,
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // OTP expires in 10 minutes
-    });
-  }
-
-  public async verifyOTP(phone: string, otp: string): Promise<boolean> {
-    await this.ensureConnected();
-    if (!this.collections.gmt_otp) {
-      throw new Error('GMT_OTP collection is not initialized');
-    }
-    const record = await this.collections.gmt_otp.findOne({
-      phone,
-      otp,
-      expiresAt: { $gt: new Date() }
-    });
-
-    if (record) {
-      await this.collections.gmt_otp.deleteOne({ _id: record._id });
-      return true;
-    }
-    return false;
-  }
-
-  public async createOrUpdateCustomer(customer: Omit<GMTCustomer, '_id' | 'createdAt'>): Promise<void> {
-    await this.ensureConnected();
-    if (!this.collections.gmt_cust) {
-      throw new Error('GMT_Cust collection is not initialized');
-    }
-    const now = new Date();
-    await this.collections.gmt_cust.updateOne(
-      { phone: customer.phone },
-      { 
-        $set: { 
-          ...customer,
-          lastLogin: now
-        },
-        $setOnInsert: {
-          createdAt: now
-        }
-      },
-      { upsert: true }
-    );
-  }
-
-  public async getCustomerByPhone(phone: string): Promise<GMTCustomer | null> {
-    await this.ensureConnected();
-    if (!this.collections.gmt_cust) {
-      throw new Error('GMT_Cust collection is not initialized');
-    }
-    return this.collections.gmt_cust.findOne({ phone });
-  }
-    if (!this._client) return;
-    if (this._isConnected) return;
-
-    try {
-      await this.client.connect();
-      const db = this.client.db(this.dbName);
-      
-      // Initialize collections
-      this.collections = {
-        customers: db.collection<Customer>('GMT_KB_customers'),
-        products: db.collection<Product>('GMT_KB_products'),
-        legacyArticles: db.collection<ServerLegacyArticle>('GMT_KB'),
-        legacyKnowledgeBase: db.collection<LegacyKnowledgeBase>('GMT_KB'),
-        chatHistory: db.collection<ChatHistory>('GMT_CH'),
-        leads: db.collection<ServerLead>('GMT_Leads'),
-        campaigns: db.collection<ServerCampaign>('Campaigns'),
-        gmt_cust: db.collection<GMTCustomer>('GMT_Cust'),
-        gmt_otp: db.collection<OTPRecord>('GMT_OTP')
-      };
-
-      // Create indexes for chat history
-      await this._collections.chatHistory?.createIndex({ phoneNumber: 1 });
-      await this._collections.chatHistory?.createIndex({ lastInteraction: 1 });
-      await this._collections.chatHistory?.createIndex({ "metadata.labels": 1 });
-
-      // Create indexes for legacy articles (GMT_KB)
-      await this._collections.legacyArticles?.createIndex({ query: 1 });
-      await this._collections.legacyArticles?.createIndex({ category: 1 });
-      await this._collections.legacyArticles?.createIndex({
-        query: "text", 
-        content: "text", 
-        category: "text" 
-      }, { name: "articles_text_search" });
-
-      // Create indexes for leads
-      await this._collections.leads?.createIndex({ phone: 1 }, { unique: true });
-      await this._collections.leads?.createIndex({ email: 1 });
-      await this._collections.leads?.createIndex({ status: 1 });
-      await this._collections.leads?.createIndex({ engagementScore: 1 });
-      await this._collections.leads?.createIndex({ lastContactedAt: 1 });
-      await this._collections.leads?.createIndex({ createdAt: 1 });
-
-      // Create indexes for campaigns
-      await this._collections.campaigns?.createIndex({ status: 1 });
-      await this._collections.campaigns?.createIndex({ type: 1 });
-      await this._collections.campaigns?.createIndex({ createdBy: 1 });
-      await this._collections.campaigns?.createIndex({ scheduledAt: 1 });
-      await this._collections.campaigns?.createIndex({ createdAt: 1 });
-      await this._collections.campaigns?.createIndex({ name: "text", template: "text" });
-
-      // Create indexes for GMT_Cust
-      await this._collections.gmt_cust?.createIndex({ phone: 1 }, { unique: true });
-      await this._collections.gmt_cust?.createIndex({ lastLogin: 1 });
-      await this._collections.gmt_cust?.createIndex({ createdAt: 1 });
-
-      // Create indexes for GMT_OTP
-      await this._collections.gmt_otp?.createIndex({ phone: 1 });
-      await this._collections.gmt_otp?.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
-      this._isConnected = true;
-    } catch (error) {
-      console.error('MongoDB connection error:', error);
-      throw error;
-    }
-  }
-
-  async storeOTP(phone: string, otp: string, name: string): Promise<void> {
-    await this.ensureConnected();
-    await this._collections.gmt_otp?.insertOne({
-      phone,
-      otp,
-      name,
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // OTP expires in 10 minutes
-    });
-  }
-
-  async verifyOTP(phone: string, otp: string): Promise<boolean> {
-    await this.ensureConnected();
-    const record = await this._collections.gmt_otp?.findOne({
-      phone,
-      otp,
-      expiresAt: { $gt: new Date() }
-    });
-
-    if (record) {
-      await this._collections.gmt_otp?.deleteOne({ _id: record._id });
-      return true;
-    }
-
-    return false;
-  }
-
-  async createOrUpdateCustomer(customer: Omit<GMTCustomer, '_id' | 'createdAt'>): Promise<void> {
-    await this.ensureConnected();
-    const now = new Date();
-    await this._collections.gmt_cust?.updateOne(
-      { phone: customer.phone },
-      { 
-        $set: { 
-          ...customer,
-          lastLogin: now
-        },
-        $setOnInsert: {
-          createdAt: now
-        }
-      },
-      { upsert: true }
-    );
-  }
-
-  async getCustomerByPhone(phone: string): Promise<GMTCustomer | null> {
-    await this.ensureConnected();
-    const customer = await this._collections.gmt_cust?.findOne({ phone });
-    return customer || null;
-  }
-
-  async getChatHistory(phone: string): Promise<ChatHistory[]> {
-    await this.ensureConnected();
-    const history = await this._collections.chatHistory?.find({ phone }).toArray();
-    return history || [];
-  }
-  
-  public async storeChatMessage(chat: Omit<ChatHistory, 'createdAt'>): Promise<void> {
-    await this.ensureConnected();
-    if (!this.collections.chatHistory) {
-      throw new Error('ChatHistory collection is not initialized');
-    }
-    await this.collections.chatHistory.insertOne({
-      ...chat,
-      createdAt: new Date()
-    });
-  }
-
-  public async getChatHistory(phone: string): Promise<ChatHistory[]> {
-    await this.ensureConnected();
-    if (!this.collections.chatHistory) {
-      throw new Error('ChatHistory collection is not initialized');
-    }
-    const history = await this.collections.chatHistory.find({ phone }).toArray();
-    return history;
-  }
-      throw new Error('ChatHistory collection is not initialized');
-    }
-    await this._collections.chatHistory.insertOne({
-      ...chat,
-      createdAt: new Date()
-    });
-  }
-}
-
-// Export singleton instance
-export const mongodb = MongoDBService.getInstance();
-    await this.connect();
-    await this.gmt_otp!.insertOne({
-      phone,
-      otp,
-      name,
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // OTP expires in 10 minutes
-    });
-    return this;
-  },
-
-  async verifyOTP(phone: string, otp: string) {
-    await this.connect();
-    const record = await this.gmt_otp!.findOne({
-      phone,
-      otp,
-      expiresAt: { $gt: new Date() }
-    });
-
-    if (record) {
-      // Delete the OTP record once verified
-      await this.gmt_otp!.deleteOne({ _id: record._id });
-      return true;
-    }
-
-    return false;
-  },
-
-  async createOrUpdateCustomer(customer: Omit<GMTCustomer, '_id' | 'createdAt'>) {
-    await this.connect();
-    const now = new Date();
-    await this.gmt_cust!.updateOne(
-      { phone: customer.phone },
-      { 
-        $set: { 
-          ...customer,
-          lastLogin: now
-        },
-        $setOnInsert: {
-          createdAt: now
-        }
-      },
-      { upsert: true }
-    );
-    return this;
-  },
-
-  async getCustomerByPhone(phone: string) {
-    await this.connect();
-    return this.gmt_cust!.findOne({ phone });
-  },
-
-  async getChatHistory(phone: string) {
-    await this.connect();
-    return this.chatHistory!.find({ phone }).toArray();
-  },
-  
-  async storeChatMessage(chat: Omit<ChatHistory, 'createdAt'>) {
-    await this.connect();
-    await this.chatHistory!.insertOne({
-      ...chat,
-      createdAt: new Date()
-    });
-    return this;
-  }
-};
-}
-
-// Service Implementation
-export class MongoDBService {
-  private static instance: MongoDBService | null = null;
-  private client: MongoClient | null = null;
-  private dbName: string;
-  private collections: MongoDBCollections = {};
-  private isConnected = false;
-
-  private constructor() {
-    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-    this.dbName = process.env.MONGODB_DB_NAME || 'test';
-    this.client = new MongoClient(uri);
-  }
-
-  public static getInstance(): MongoDBService {
-    if (!MongoDBService.instance) {
-      MongoDBService.instance = new MongoDBService();
-    }
-    return MongoDBService.instance;
-  }
-  private static instance: MongoDBService;
-  private client: MongoClient;
-  private dbName: string;
-  private isConnected: boolean = false;
-  
-  private customers!: Collection<Customer>;
-  private products!: Collection<Product>;
-  private legacyArticles!: Collection<ServerLegacyArticle>; // GMT_KB for articles
-  private legacyKnowledgeBase!: Collection<LegacyKnowledgeBase>; // Keep for backward compatibility
-  private leads!: Collection<ServerLead>;
-  private campaigns!: Collection<ServerCampaign>;
-  private chatHistory!: Collection<ChatHistory>;
-  private gmt_cust!: Collection<GMTCustomer>;
-  private gmt_otp!: Collection<OTPRecord>;
-
-  // Method to store OTP
-  public async storeOTP(phone: string, otp: string, name: string): Promise<void> {
-    await this.gmt_otp.insertOne({
-      phone,
-      otp,
-      name,
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000) // OTP expires in 10 minutes
-    });
-  }
-
-  // Method to verify OTP
-  public async verifyOTP(phone: string, otp: string): Promise<boolean> {
-    const record = await this.gmt_otp.findOne({
-      phone,
-      otp,
-      expiresAt: { $gt: new Date() }
-    });
-
-    if (record) {
-      // Delete the OTP record once verified
-      await this.gmt_otp.deleteOne({ _id: record._id });
-      return true;
-    }
-
-    return false;
-  }
-
-  // Method to create or update customer
-  public async createOrUpdateCustomer(customer: Omit<GMTCustomer, '_id' | 'createdAt'>): Promise<void> {
-    const now = new Date();
-    await this.gmt_cust.updateOne(
-      { phone: customer.phone },
-      { 
-        $set: { 
-          ...customer,
-          lastLogin: now
-        },
-        $setOnInsert: {
-          createdAt: now
-        }
-      },
-      { upsert: true }
-    );
-  }
-  private gmt_cust!: Collection<GMTCustomer>;
-  private gmt_otp!: Collection<OTPRecord>;
-  
-  private constructor() {
-    const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-    this.dbName = process.env.MONGODB_DB_NAME || 'test';
-    this.client = new MongoClient(uri);
-  }
-  
-  /**
-   * Get the singleton instance of MongoDBService
-   */
-  public static getInstance(): MongoDBService {
-    if (!MongoDBService.instance) {
-      MongoDBService.instance = new MongoDBService();
-    }
-    
-    return MongoDBService.instance;
-  }
-  
-  /**
-   * Connect to MongoDB
-   */
-  private chatHistory!: Collection<ChatHistory>;
-
-  // Define interfaces for new collections
-  interface GMTCustomer {
-    _id?: ObjectId;
-    name: string;
-    phone: string;
-    lastLogin: Date;
-    createdAt?: Date;
-  }
-
-  interface OTPRecord {
-    _id?: ObjectId;
-    phone: string;
-    otp: string;
-    name: string;
-    createdAt: Date;
-    expiresAt: Date;
-  }
-
-  public async connect(): Promise<void> {
-    if (this.isConnected) return;
-    
-    try {
-      await this.client.connect();
-      console.log('Connected to MongoDB');
-      
-      const db = this.client.db(this.dbName);
-      this.customers = db.collection<Customer>('GMT_KB_customers');
-      this.products = db.collection<Product>('GMT_KB_products');
-      this.legacyArticles = db.collection<ServerLegacyArticle>('GMT_KB');
-      this.legacyKnowledgeBase = db.collection<LegacyKnowledgeBase>('GMT_KB'); // Same as legacyArticles but with old interface
-      this.chatHistory = db.collection<ChatHistory>('GMT_CH');
-      this.leads = db.collection<ServerLead>('GMT_Leads');
-      this.campaigns = db.collection<ServerCampaign>('Campaigns');
-      this.gmt_cust = db.collection<GMTCustomer>('GMT_Cust');
-      this.gmt_otp = db.collection<OTPRecord>('GMT_OTP');
-      
-      this.isConnected = true;
-
-      // Create indexes for chat history
-      await this.chatHistory.createIndex({ phoneNumber: 1 });
-      await this.chatHistory.createIndex({ lastInteraction: 1 });
-      await this.chatHistory.createIndex({ "metadata.labels": 1 });
-      
-      // Create indexes for legacy articles (GMT_KB)
-      await this.legacyArticles.createIndex({ title: 1 });
-      await this.legacyArticles.createIndex({ category: 1 });
-      
-      // Handle text search index - drop and recreate if exists with different options
-      try {
-        await this.legacyArticles.createIndex({ 
-          title: "text",
-          content: "text", 
-          category: "text"
-        }, { name: "articles_text_search" });
-      } catch (error: any) {
-        if (error.code === 85) { // IndexOptionsConflict
-          console.log('Dropping existing text search index and recreating...');
-          await this.legacyArticles.dropIndex("articles_text_search");
-          await this.legacyArticles.createIndex({ 
-            title: "text",
-            content: "text", 
-            category: "text"
-          }, { name: "articles_text_search" });
-        } else {
-          throw error;
-        }
-      }
-      
-      // Create indexes for leads
-      await this.leads.createIndex({ phone: 1 }, { unique: true });
-      await this.leads.createIndex({ email: 1 });
-      await this.leads.createIndex({ status: 1 });
-      await this.leads.createIndex({ engagementScore: 1 });
-      await this.leads.createIndex({ lastContactedAt: 1 });
-      await this.leads.createIndex({ createdAt: 1 });
-      
-      // Create indexes for campaigns
-      await this.campaigns.createIndex({ status: 1 });
-      await this.campaigns.createIndex({ type: 1 });
-      await this.campaigns.createIndex({ createdBy: 1 });
-      await this.campaigns.createIndex({ scheduledAt: 1 });
-      await this.campaigns.createIndex({ createdAt: 1 });
-      await this.campaigns.createIndex({ 
-        name: "text", 
-        template: "text" 
-      }, { name: "campaigns_text_search" });
-      
-    } catch (error) {
-      console.error('Error connecting to MongoDB:', error);
-      throw error;
-    }
-  }
-  
-  /**
-   * Find a customer by phone number
-   * @param phone Customer's phone number
-   */
-  public async findCustomerByPhone(phone: string): Promise<Customer | null> {
-    await this.ensureConnection();
-    return this.customers.findOne({ phone });
-  }
-  
-  /**
-   * Save a new customer to the database
-   * @param customer Customer data
-   */
-  public async saveCustomer(customer: Customer): Promise<void> {
-    await this.ensureConnection();
-    await this.customers.insertOne(customer);
-  }
-  
-  /**
-   * Update conversation history for a customer
-   * @param phone Customer's phone number
-   * @param messages New messages to add to history
-   */
-  public async updateConversation(phone: string, messages: Array<{role: string, content: string}>): Promise<void> {
-    await this.ensureConnection();
-    
-    await this.customers.updateOne(
-      { phone },
-      { 
-        $push: { 
-          conversationHistory: { 
-            $each: messages 
-          } 
-        },
-        $set: { lastContact: new Date() }
-      }
-    );
-  }
-  
-  /**
-   * Get inactive customers who haven't interacted in a specified number of days
-   * @param days Number of days of inactivity
-   */
-  public async getInactiveCustomers(days: number): Promise<Customer[]> {
-    await this.ensureConnection();
-    
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - days);
-    
-    return this.customers.find({
-      lastContact: { $lt: cutoffDate }
-    }).toArray();
-  }
-  
-  /**
-   * Update the last contact date for a customer
-   * @param phone Customer's phone number
-   */
-  public async updateLastContact(phone: string): Promise<void> {
-    await this.ensureConnection();
-    
-    await this.customers.updateOne(
-      { phone },
-      { $set: { lastContact: new Date() } }
-    );
-  }
-  
-  /**
-   * Get products to promote
-   */
-  public async getProductsToPromote(): Promise<Product[]> {
-    await this.ensureConnection();
-    return this.products.find().toArray();
-  }
-  
-  /**
-   * Get relevant knowledge base content based on user query (only GMT_KB articles)
-   * @param query User's message or query
-   */
-  public async getRelevantKnowledge(query: string): Promise<string> {
-    await this.ensureConnection();
-    
-    if (!query || query.trim().length === 0) return '';
-
-    try {
-      // Search GMT_KB articles using text search
-      const articleResults = await this.legacyArticles.find({
-        $text: { $search: query }
-      }).sort({ score: { $meta: "textScore" } }).limit(10).toArray();
-
-      // If text search doesn't work, fallback to regex search
-      let results = articleResults;
-      if (results.length === 0) {
-        const words = query.toLowerCase().split(/\W+/).filter(word => word.length > 3);
-        if (words.length > 0) {
-          const regexPatterns = words.map(word => new RegExp(word, 'i'));
-          results = await this.legacyArticles.find({
-            $or: [
-              ...regexPatterns.map(pattern => ({ title: pattern })),
-              ...regexPatterns.map(pattern => ({ content: pattern }))
-            ]
-          }).limit(5).toArray();
-        }
-      }
-      
-      return results.map(item => item.content).join('\n\n');
-    } catch (error) {
-      console.error('Error in getRelevantKnowledge:', error);
-      // Fallback to legacy method
-      return this.getLegacyRelevantKnowledge(query);
-    }
-  }
-  
-  /**
-   * Legacy method - Add an entry to the knowledge base
-   * @param query Keywords or phrases to match
-   * @param content Knowledge content
-   */
-  public async addKnowledge(query: string, content: string): Promise<void> {
-    await this.ensureConnection();
-    
-    await this.legacyKnowledgeBase.insertOne({
-      query,
-      content
-    });
-  }
-
-  /**
-   * Get all legacy knowledge base entries (for debugging/testing)
-   */
-  public async getAllKnowledge(): Promise<LegacyKnowledgeBase[]> {
-    await this.ensureConnection();
-    return this.legacyKnowledgeBase.find().toArray();
-  }
-
-  /**
-   * Legacy fallback method for getRelevantKnowledge
-   */
-  private async getLegacyRelevantKnowledge(query: string): Promise<string> {
-    const words = query.toLowerCase().split(/\W+/).filter(word => word.length > 3);
-    
-    if (words.length === 0) return '';
-    
-    const regexPatterns = words.map(word => new RegExp(word, 'i'));
-    
-    const relevantKnowledge = await this.legacyKnowledgeBase.find({
-      $or: [
-        ...regexPatterns.map(pattern => ({ content: pattern }))
-      ]
-    }).toArray();
-    
-    return relevantKnowledge.map(item => item.content).join('\n\n');
-  }
-
-  // New Knowledge Base Methods - Dual Collection Approach
-
-  /**
-   * Create a new article in GMT_KB collection
-   */
-  public async createLegacyArticle(articleData: CreateLegacyArticleData): Promise<any> {
-    await this.ensureConnection();
-    
-    const article = {
-      title: articleData.title,
-      content: articleData.content,
-      category: articleData.category,
-    };
-    
-    const result = await this.legacyArticles.insertOne(article as ServerLegacyArticle);
-    return { ...article, _id: result.insertedId.toString() };
-  }
-
-
-  // Backward compatibility method
-  public async createArticle(articleData: CreateArticleData): Promise<any> {
-    return this.createLegacyArticle(articleData);
-  }
-
-  /**
-   * Get legacy articles from GMT_KB collection with filtering and pagination
-   */
-  public async getLegacyArticles(query: { search?: string; category?: string; page?: number; limit?: number }): Promise<{
-    articles: any[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
-    await this.ensureConnection();
-    
-    const { page = 1, limit = 20, search, category } = query;
-    const skip = (page - 1) * limit;
-    
-    // Build MongoDB filter
-    const filter: any = {};
-    
-    if (category) {
-      filter.category = category;
-    }
-    
-    let articles: any[];
-    let total: number;
-    
-    if (search && search.trim().length > 0) {
-      // Use text search when search query is provided
-      const searchFilter = {
-        ...filter,
-        $text: { $search: search }
-      };
-      
-      const [searchResults, searchTotal] = await Promise.all([
-        this.legacyArticles
-          .find(searchFilter)
-          .sort({ score: { $meta: "textScore" } })
-          .skip(skip)
-          .limit(limit)
-          .toArray(),
-        this.legacyArticles.countDocuments(searchFilter)
-      ]);
-      
-      articles = searchResults;
-      total = searchTotal;
-    } else {
-      // Regular query without text search
-      const [regularResults, regularTotal] = await Promise.all([
-        this.legacyArticles
-          .find(filter)
-          .skip(skip)
-          .limit(limit)
-          .toArray(),
-        this.legacyArticles.countDocuments(filter)
-      ]);
-      
-      articles = regularResults;
-      total = regularTotal;
-    }
-    
-    // Convert ObjectId to string and handle backward compatibility
-    const articlesWithStringIds = articles.map(article => {
-      const converted = databaseToLegacyArticle({
-        _id: article._id?.toString() || '',
-        title: article.title,
-        content: article.content,
-        category: article.category
-      });
-      return {
-        ...converted,
-        _id: article._id?.toString(),
-        type: 'article', // Add type field for frontend compatibility
-        title: article.title,
-        uploadedAt: new Date() // Add upload date
-      };
-    });
-    
-    return {
-      articles: articlesWithStringIds,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit)
-    };
-  }
-
-
-  /**
-   * Get a single legacy article by ID
-   */
-  public async getLegacyArticleById(id: string): Promise<any | null> {
-    await this.ensureConnection();
-    const article = await this.legacyArticles.findOne({ _id: new ObjectId(id) });
-    if (!article) return null;
-    
-    // Convert to LegacyArticle format for consistency
-    const converted = databaseToLegacyArticle({
-      _id: article._id?.toString() || '',
-      title: article.title,
-      content: article.content,
-      category: article.category
-    });
-    
-      return {
-        ...converted,
-        _id: article._id?.toString(),
-        type: 'article', // Add type field for frontend compatibility
-        title: article.title,
-        uploadedAt: new Date() // Add upload date
-      };
-  }
-
-
-  /**
-   * Update a legacy article
-   */
-  public async updateLegacyArticle(id: string, updates: UpdateLegacyArticleData): Promise<any | null> {
-    await this.ensureConnection();
-    
-    const updateData = {
-      ...updates
-    };
-    
-    const result = await this.legacyArticles.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: updateData },
-      { returnDocument: 'after' }
-    );
-    
-    if (!result) return null;
-    
-    return {
-      ...result,
-      _id: result._id?.toString()
-    };
-  }
-
-  /**
-   * Delete a legacy article
-   */
-  public async deleteLegacyArticle(id: string): Promise<boolean> {
-    await this.ensureConnection();
-    const result = await this.legacyArticles.deleteOne({ _id: new ObjectId(id) });
-    return result.deletedCount === 1;
-  }
-
-
-  // Backward compatibility methods (articles only)
-  public async getKnowledgeDocumentById(id: string): Promise<any | null> {
-    return this.getLegacyArticleById(id);
-  }
-
-  public async updateKnowledgeDocument(id: string, updates: any): Promise<any | null> {
-    return this.updateLegacyArticle(id, updates);
-  }
-
-  public async deleteKnowledgeDocument(id: string): Promise<boolean> {
-    return this.deleteLegacyArticle(id);
-  }
-
-  /**
-   * Get chat history for a phone number
-   * @param phoneNumber The phone number to get chat history for
-   */
-  public async getChatHistory(phoneNumber: string): Promise<ChatHistory | null> {
-    await this.ensureConnection();
-    return this.chatHistory.findOne({ phoneNumber });
-  }
-
-  /**
-   * Add a message to chat history
-   * @param phoneNumber The phone number of the sender/recipient
-   * @param role The role of the message sender (user/assistant)
-   * @param content The message content
-   */
+  // ============== Chat History Methods (extended) ==============
   public async addMessageToChatHistory(phoneNumber: string, role: 'user' | 'assistant', content: string): Promise<void> {
-    await this.ensureConnection();
-    
-    const message = {
-      role,
-      content,
-      timestamp: new Date()
-    };
-
-    await this.chatHistory.updateOne(
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) throw new Error('ChatHistory collection is not initialized');
+    const message = { role, content, timestamp: new Date() } as any;
+    await this.collections.chatHistory.updateOne(
       { phoneNumber },
       {
         $push: { messages: message },
@@ -1351,14 +342,10 @@ export class MongoDBService {
     );
   }
 
-  /**
-   * Get recent chat histories
-   * @param limit Number of chat histories to retrieve
-   * @param skip Number of chat histories to skip
-   */
   public async getRecentChatHistories(limit: number = 20, skip: number = 0): Promise<ChatHistory[]> {
-    await this.ensureConnection();
-    return this.chatHistory
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) throw new Error('ChatHistory collection is not initialized');
+    return this.collections.chatHistory
       .find()
       .sort({ lastInteraction: -1 })
       .skip(skip)
@@ -1366,36 +353,49 @@ export class MongoDBService {
       .toArray();
   }
 
-  /**
-   * Update chat metadata
-   * @param phoneNumber The phone number of the chat
-   * @param metadata The metadata to update
-   */
-  public async updateChatMetadata(phoneNumber: string, metadata: Partial<ChatHistory['metadata']>): Promise<void> {
-    await this.ensureConnection();
-    await this.chatHistory.updateOne(
+  public async updateChatMetadata(phoneNumber: string, metadata: Record<string, unknown>): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) throw new Error('ChatHistory collection is not initialized');
+    await this.collections.chatHistory.updateOne(
       { phoneNumber },
-      { $set: { metadata: metadata } }
+      { $set: { metadata } }
     );
   }
 
-  /**
-   * Get chat history by label
-   * @param label The label to search for
-   */
   public async getChatHistoriesByLabel(label: string): Promise<ChatHistory[]> {
-    await this.ensureConnection();
-    return this.chatHistory
-      .find({ "metadata.labels": label })
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) throw new Error('ChatHistory collection is not initialized');
+    return this.collections.chatHistory
+      .find({ "metadata.labels": label } as any)
       .sort({ lastInteraction: -1 })
       .toArray();
   }
-  
-  /**
-   * Get leads with filtering, pagination, and sorting
-   * @param filters Filter criteria
-   * @param pagination Pagination and sorting options
-   */
+
+  // ============== Products & Customers Helpers ==============
+  public async getProductsToPromote(): Promise<Product[]> {
+    await this.ensureConnected();
+    if (!this.collections.products) throw new Error('Products collection is not initialized');
+    return this.collections.products.find().toArray();
+  }
+
+  public async getInactiveCustomers(days: number): Promise<Customer[]> {
+    await this.ensureConnected();
+    if (!this.collections.customers) throw new Error('Customers collection is not initialized');
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    return this.collections.customers.find({ lastContact: { $lt: cutoffDate } } as any).toArray();
+  }
+
+  public async updateLastContact(phone: string): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.customers) throw new Error('Customers collection is not initialized');
+    await this.collections.customers.updateOne(
+      { phone },
+      { $set: { lastContact: new Date() } }
+    );
+  }
+
+  // ============== Leads Methods ==============
   public async getLeads(filters: LeadFilters = {}, pagination: PaginationOptions = {}): Promise<{
     leads: any[];
     total: number;
@@ -1403,14 +403,14 @@ export class MongoDBService {
     limit: number;
     totalPages: number;
   }> {
-    await this.ensureConnection();
-    
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+
     const { page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc' } = pagination;
     const skip = (page - 1) * limit;
-    
-    // Build MongoDB filter query
+
     const query: any = {};
-    
+
     if (filters.status) {
       if (Array.isArray(filters.status)) {
         query.status = { $in: filters.status };
@@ -1418,52 +418,41 @@ export class MongoDBService {
         query.status = filters.status;
       }
     }
-    
-    if (filters.engagementScore) {
+
+    if ((filters as any).engagementScore) {
       query.engagementScore = {};
-      if (filters.engagementScore.min !== undefined) {
-        query.engagementScore.$gte = filters.engagementScore.min;
-      }
-      if (filters.engagementScore.max !== undefined) {
-        query.engagementScore.$lte = filters.engagementScore.max;
-      }
+      const es: any = (filters as any).engagementScore;
+      if (es.min !== undefined) query.engagementScore.$gte = es.min;
+      if (es.max !== undefined) query.engagementScore.$lte = es.max;
     }
-    
-    if (filters.search) {
+
+    if ((filters as any).search) {
       query.$or = [
-        { name: { $regex: filters.search, $options: 'i' } },
-        { phone: { $regex: filters.search, $options: 'i' } },
-        { email: { $regex: filters.search, $options: 'i' } }
+        { name: { $regex: (filters as any).search, $options: 'i' } },
+        { phone: { $regex: (filters as any).search, $options: 'i' } },
+        { email: { $regex: (filters as any).search, $options: 'i' } },
       ];
     }
-    
-    if (filters.dateRange) {
+
+    if ((filters as any).dateRange) {
       query.createdAt = {};
-      if (filters.dateRange.start) {
-        query.createdAt.$gte = filters.dateRange.start;
-      }
-      if (filters.dateRange.end) {
-        query.createdAt.$lte = filters.dateRange.end;
-      }
+      const dr: any = (filters as any).dateRange;
+      if (dr.start) query.createdAt.$gte = dr.start;
+      if (dr.end) query.createdAt.$lte = dr.end;
     }
-    
-    // Execute queries
+
     const [leads, total] = await Promise.all([
-      this.leads
+      this.collections.leads
         .find(query)
         .sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1 })
         .skip(skip)
         .limit(limit)
         .toArray(),
-      this.leads.countDocuments(query)
+      this.collections.leads.countDocuments(query)
     ]);
-    
-    // Convert ObjectId to string for frontend
-    const leadsWithStringIds = leads.map(lead => ({
-      ...lead,
-      _id: lead._id?.toString()
-    }));
-    
+
+    const leadsWithStringIds = leads.map(lead => ({ ...lead, _id: (lead as any)._id?.toString() }));
+
     return {
       leads: leadsWithStringIds,
       total,
@@ -1472,476 +461,310 @@ export class MongoDBService {
       totalPages: Math.ceil(total / limit)
     };
   }
-  
-  /**
-   * Get a single lead by ID
-   * @param id Lead ID
-   */
+
   public async getLeadById(id: string): Promise<any | null> {
-    await this.ensureConnection();
-    const lead = await this.leads.findOne({ _id: new ObjectId(id) });
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    const lead = await this.collections.leads.findOne({ _id: new ObjectId(id) } as any);
     if (!lead) return null;
-    
-    // Convert ObjectId to string for frontend
-    return {
-      ...lead,
-      _id: lead._id?.toString()
-    };
+    return { ...lead, _id: (lead as any)._id?.toString() } as any;
   }
-  
-  /**
-   * Create a new lead
-   * @param leadData Lead data
-   */
+
   public async createLead(leadData: Omit<Lead, '_id' | 'createdAt' | 'updatedAt'>): Promise<any> {
-    await this.ensureConnection();
-    
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
     const now = new Date();
-    const lead = {
-      ...leadData,
-      createdAt: now,
-      updatedAt: now
-    };
-    
-    const result = await this.leads.insertOne(lead as ServerLead);
-    return { ...lead, _id: result.insertedId.toString() };
+    const lead = { ...(leadData as any), createdAt: now, updatedAt: now } as ServerLead;
+    const result = await this.collections.leads.insertOne(lead);
+    return { ...(lead as any), _id: result.insertedId.toString() } as any;
   }
-  
-  /**
-   * Update a lead
-   * @param id Lead ID
-   * @param updates Lead updates
-   */
+
   public async updateLead(id: string, updates: Partial<Omit<Lead, '_id'>>): Promise<any | null> {
-    await this.ensureConnection();
-    
-    const updateData = {
-      ...updates,
-      updatedAt: new Date()
-    };
-    
-    const result = await this.leads.findOneAndUpdate(
-      { _id: new ObjectId(id) },
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    const updateData = { ...(updates as any), updatedAt: new Date() };
+    const result: any = await this.collections.leads.findOneAndUpdate(
+      { _id: new ObjectId(id) } as any,
       { $set: updateData },
-      { returnDocument: 'after' }
+      { returnDocument: 'after' as any }
     );
-    
-    if (!result) return null;
-    
-    // Convert ObjectId to string for frontend
-    return {
-      ...result,
-      _id: result._id?.toString()
-    };
+    if (!result || !result.value) return null;
+    const doc = result.value;
+    return { ...doc, _id: doc._id?.toString() } as any;
   }
-  
-  /**
-   * Delete a lead
-   * @param id Lead ID
-   */
+
   public async deleteLead(id: string): Promise<boolean> {
-    await this.ensureConnection();
-    const result = await this.leads.deleteOne({ _id: new ObjectId(id) });
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    const result = await this.collections.leads.deleteOne({ _id: new ObjectId(id) } as any);
     return result.deletedCount === 1;
   }
-  
-  /**
-   * Delete multiple leads
-   * @param ids Array of lead IDs
-   */
-  public async deleteLeads(ids: string[]): Promise<number> {
-    await this.ensureConnection();
+
+  public async deleteManyLeads(ids: string[]): Promise<number> {
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
     const objectIds = ids.map(id => new ObjectId(id));
-    const result = await this.leads.deleteMany({ _id: { $in: objectIds } });
-    return result.deletedCount;
+    const result = await this.collections.leads.deleteMany({ _id: { $in: objectIds } } as any);
+    return result.deletedCount ?? 0;
   }
-  
-  /**
-   * Import multiple leads
-   * @param leadsData Array of lead data
-   */
+
   public async importLeads(leadsData: Array<Omit<ServerLead, '_id' | 'createdAt' | 'updatedAt'>>): Promise<{
-    success: number;
-    failed: number;
-    errors: Array<{ data: any; error: string }>;
+    success: number; failed: number; errors: Array<{ data: any; error: string }>
   }> {
-    await this.ensureConnection();
-    
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
     const now = new Date();
-    const results = {
-      success: 0,
-      failed: 0,
-      errors: [] as Array<{ data: any; error: string }>
-    };
-    
+    const results = { success: 0, failed: 0, errors: [] as Array<{ data: any; error: string }> };
     for (const leadData of leadsData) {
       try {
-        const lead = {
-          ...leadData,
-          createdAt: now,
-          updatedAt: now
-        };
-        
-        await this.leads.insertOne(lead as ServerLead);
+        const lead = { ...(leadData as any), createdAt: now, updatedAt: now } as ServerLead;
+        await this.collections.leads.insertOne(lead);
         results.success++;
       } catch (error: any) {
         results.failed++;
-        results.errors.push({
-          data: leadData,
-          error: error.message || 'Unknown error'
-        });
+        results.errors.push({ data: leadData, error: error?.message || 'Unknown error' });
       }
     }
-    
     return results;
   }
-  
-  /**
-   * Check if phone number already exists
-   * @param phone Phone number to check
-   * @param excludeId Optional ID to exclude from check (for updates)
-   */
-  public async phoneExists(phone: string, excludeId?: string): Promise<boolean> {
-    await this.ensureConnection();
-    
-    const query: any = { phone };
-    if (excludeId) {
-      query._id = { $ne: new ObjectId(excludeId) };
+
+  public async importLeadsFromExcel(fileData: string, _fileName: string): Promise<{ success: number; failed: number; errors: Array<{ data: any; error: string }> }> {
+    // Minimal implementation: expect base64-encoded JSON array of leads
+    try {
+      const base64 = fileData.includes(',') ? fileData.split(',')[1] : fileData;
+      const decoded = Buffer.from(base64, 'base64').toString('utf8');
+      const parsed = JSON.parse(decoded);
+      if (Array.isArray(parsed)) {
+        return await this.importLeads(parsed);
+      }
+      return { success: 0, failed: 1, errors: [{ data: null, error: 'Parsed content is not an array' }] };
+    } catch (e: any) {
+      return { success: 0, failed: 1, errors: [{ data: null, error: e?.message || 'Failed to parse fileData' }] };
     }
-    
-    const count = await this.leads.countDocuments(query);
-    return count > 0;
   }
-  
-  // ==================== CAMPAIGN METHODS ====================
-  
-  /**
-   * Create a new campaign
-   * @param campaignData Campaign data
-   */
+
+  // ============== Knowledge Base (Legacy Articles) ==============
+  public async addKnowledge(query: string, content: string): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.legacyKnowledgeBase) throw new Error('Legacy KB collection is not initialized');
+    await this.collections.legacyKnowledgeBase.insertOne({ query, content } as any);
+  }
+
+  public async getAllKnowledge(): Promise<LegacyKnowledgeBase[]> {
+    await this.ensureConnected();
+    if (!this.collections.legacyKnowledgeBase) throw new Error('Legacy KB collection is not initialized');
+    return this.collections.legacyKnowledgeBase.find().toArray();
+  }
+
+  public async createLegacyArticle(articleData: CreateLegacyArticleData): Promise<any> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) throw new Error('Legacy articles collection is not initialized');
+    const article = { title: (articleData as any).title, content: (articleData as any).content, category: (articleData as any).category } as ServerLegacyArticle;
+    const result = await this.collections.legacyArticles.insertOne(article);
+    return { ...article, _id: result.insertedId.toString(), type: 'article', uploadedAt: new Date() } as any;
+  }
+
+  public async getLegacyArticles(query: { search?: string; category?: string; page?: number; limit?: number }): Promise<{ articles: any[]; total: number; page: number; limit: number; totalPages: number; }> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) throw new Error('Legacy articles collection is not initialized');
+    const { page = 1, limit = 20, search, category } = query || {} as any;
+    const skip = (page - 1) * limit;
+    const filter: any = {};
+    if (category) filter.category = category;
+
+    let articles: any[] = [];
+    let total = 0;
+
+    if (search && search.trim().length > 0) {
+      const searchFilter = { ...filter, $text: { $search: search } };
+      const [searchResults, searchTotal] = await Promise.all([
+        this.collections.legacyArticles.find(searchFilter).sort({ score: { $meta: 'textScore' } } as any).skip(skip).limit(limit).toArray(),
+        this.collections.legacyArticles.countDocuments(searchFilter)
+      ]);
+      articles = searchResults;
+      total = searchTotal;
+    } else {
+      const [regularResults, regularTotal] = await Promise.all([
+        this.collections.legacyArticles.find(filter).skip(skip).limit(limit).toArray(),
+        this.collections.legacyArticles.countDocuments(filter)
+      ]);
+      articles = regularResults;
+      total = regularTotal;
+    }
+
+    const articlesWithStringIds = articles.map(article => {
+      const converted = databaseToLegacyArticle({
+        _id: (article as any)._id?.toString() || '',
+        title: (article as any).title,
+        content: (article as any).content,
+        category: (article as any).category
+      });
+      return { ...converted, _id: (article as any)._id?.toString(), type: 'article', title: (article as any).title, uploadedAt: new Date() } as any;
+    });
+
+    return { articles: articlesWithStringIds, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  public async getLegacyArticleById(id: string): Promise<any | null> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) throw new Error('Legacy articles collection is not initialized');
+    const article: any = await this.collections.legacyArticles.findOne({ _id: new ObjectId(id) } as any);
+    if (!article) return null;
+    const converted = databaseToLegacyArticle({ _id: article._id?.toString() || '', title: article.title, content: article.content, category: article.category });
+    return { ...converted, _id: article._id?.toString(), type: 'article', title: article.title, uploadedAt: new Date() } as any;
+  }
+
+  public async updateLegacyArticle(id: string, updates: UpdateLegacyArticleData): Promise<any | null> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) throw new Error('Legacy articles collection is not initialized');
+    const result: any = await this.collections.legacyArticles.findOneAndUpdate(
+      { _id: new ObjectId(id) } as any,
+      { $set: { ...(updates as any) } },
+      { returnDocument: 'after' as any }
+    );
+    if (!result || !result.value) return null;
+    const doc = result.value;
+    return { ...doc, _id: doc._id?.toString() } as any;
+  }
+
+  public async deleteLegacyArticle(id: string): Promise<boolean> {
+    await this.ensureConnected();
+    if (!this.collections.legacyArticles) throw new Error('Legacy articles collection is not initialized');
+    const result = await this.collections.legacyArticles.deleteOne({ _id: new ObjectId(id) } as any);
+    return result.deletedCount === 1;
+  }
+
+  // ============== Campaigns ==============
   public async createCampaign(campaignData: CreateCampaignData): Promise<Campaign> {
-    await this.ensureConnection();
-    
+    await this.ensureConnected();
+    if (!this.collections.campaigns) throw new Error('Campaigns collection is not initialized');
     const now = new Date();
     const campaign: ServerCampaign = {
-      name: campaignData.name,
-      type: campaignData.type,
-      status: "draft", // Always start as draft
-      template: campaignData.template,
-      variables: campaignData.variables,
-      mediaUrl: campaignData.mediaUrl,
-      mediaType: campaignData.mediaType,
-      leadIds: campaignData.leadIds,
-      scheduleType: campaignData.scheduleType,
-      scheduledAt: campaignData.scheduledAt ? new Date(campaignData.scheduledAt) : undefined,
-      timezone: campaignData.timezone,
-      recurringPattern: campaignData.recurringPattern ? {
-        frequency: campaignData.recurringPattern.frequency,
-        interval: campaignData.recurringPattern.interval,
-        endDate: campaignData.recurringPattern.endDate ? new Date(campaignData.recurringPattern.endDate) : undefined
+      name: (campaignData as any).name,
+      type: (campaignData as any).type,
+      status: 'draft',
+      template: (campaignData as any).template,
+      variables: (campaignData as any).variables,
+      mediaUrl: (campaignData as any).mediaUrl,
+      mediaType: (campaignData as any).mediaType,
+      leadIds: (campaignData as any).leadIds,
+      scheduleType: (campaignData as any).scheduleType,
+      scheduledAt: (campaignData as any).scheduledAt ? new Date((campaignData as any).scheduledAt) : undefined,
+      timezone: (campaignData as any).timezone,
+      recurringPattern: (campaignData as any).recurringPattern ? {
+        frequency: (campaignData as any).recurringPattern.frequency,
+        interval: (campaignData as any).recurringPattern.interval,
+        endDate: (campaignData as any).recurringPattern.endDate ? new Date((campaignData as any).recurringPattern.endDate) : undefined
       } : undefined,
-      targetCount: campaignData.leadIds.length,
+      targetCount: ((campaignData as any).leadIds || []).length,
       sentCount: 0,
       createdAt: now,
       updatedAt: now,
-      createdBy: campaignData.createdBy
-    };
-    
-    const result = await this.campaigns.insertOne(campaign);
-    
-    return {
-      ...campaign,
-      _id: result.insertedId.toString()
-    };
+      createdBy: (campaignData as any).createdBy
+    } as any;
+    const result = await this.collections.campaigns.insertOne(campaign as any);
+    return { ...(campaign as any), _id: result.insertedId.toString() } as any;
   }
-  
-  /**
-   * Get campaigns with filtering and pagination
-   * @param filters Filter criteria
-   * @param pagination Pagination options
-   */
-  public async getCampaigns(filters: CampaignFilters = {}, pagination: Partial<CampaignPagination> = {}): Promise<{
-    campaigns: Campaign[];
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  }> {
-    await this.ensureConnection();
-    
+
+  public async getCampaigns(filters: CampaignFilters = {}, pagination: Partial<CampaignPagination> = {}): Promise<{ campaigns: Campaign[]; total: number; page: number; limit: number; totalPages: number; }> {
+    await this.ensureConnected();
+    if (!this.collections.campaigns) throw new Error('Campaigns collection is not initialized');
     const { page = 1, limit = 20, sortBy = 'createdAt', sortOrder = 'desc' } = pagination;
     const skip = (page - 1) * limit;
-    
-    // Build MongoDB filter query
     const query: any = {};
-    
-    if (filters.status) {
-      if (Array.isArray(filters.status)) {
-        query.status = { $in: filters.status };
-      } else {
-        query.status = filters.status;
-      }
+
+    if ((filters as any).status) {
+      if (Array.isArray((filters as any).status)) query.status = { $in: (filters as any).status };
+      else query.status = (filters as any).status;
     }
-    
-    if (filters.type) {
-      if (Array.isArray(filters.type)) {
-        query.type = { $in: filters.type };
-      } else {
-        query.type = filters.type;
-      }
+    if ((filters as any).type) {
+      if (Array.isArray((filters as any).type)) query.type = { $in: (filters as any).type };
+      else query.type = (filters as any).type;
     }
-    
-    if (filters.createdBy) {
-      query.createdBy = filters.createdBy;
-    }
-    
-    if (filters.search) {
+    if ((filters as any).createdBy) query.createdBy = (filters as any).createdBy;
+    if ((filters as any).search) {
       query.$or = [
-        { name: { $regex: filters.search, $options: 'i' } },
-        { template: { $regex: filters.search, $options: 'i' } }
+        { name: { $regex: (filters as any).search, $options: 'i' } },
+        { template: { $regex: (filters as any).search, $options: 'i' } }
       ];
     }
-    
-    if (filters.dateRange) {
+    if ((filters as any).dateRange) {
       query.createdAt = {};
-      if (filters.dateRange.start) {
-        query.createdAt.$gte = filters.dateRange.start;
-      }
-      if (filters.dateRange.end) {
-        query.createdAt.$lte = filters.dateRange.end;
-      }
+      const dr: any = (filters as any).dateRange;
+      if (dr.start) query.createdAt.$gte = dr.start;
+      if (dr.end) query.createdAt.$lte = dr.end;
     }
-    
-    // Execute queries
+
     const [campaigns, total] = await Promise.all([
-      this.campaigns
+      this.collections.campaigns
         .find(query)
-        .sort({ [sortBy]: sortOrder === 'asc' ? 1 : -1 })
+        .sort({ [sortBy!]: sortOrder === 'asc' ? 1 : -1 })
         .skip(skip)
-        .limit(limit)
+        .limit(limit!)
         .toArray(),
-      this.campaigns.countDocuments(query)
+      this.collections.campaigns.countDocuments(query)
     ]);
-    
-    // Convert ObjectId to string for frontend
-    const campaignsWithStringIds = campaigns.map(campaign => ({
-      ...campaign,
-      _id: campaign._id?.toString()
-    }));
-    
-    return {
-      campaigns: campaignsWithStringIds,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit)
-    };
+
+    const campaignsWithStringIds = campaigns.map(c => ({ ...c, _id: (c as any)._id?.toString() }));
+
+    return { campaigns: campaignsWithStringIds as any, total, page: page!, limit: limit!, totalPages: Math.ceil(total / (limit!)) };
   }
-  
-  /**
-   * Get a single campaign by ID
-   * @param id Campaign ID
-   */
+
   public async getCampaignById(id: string): Promise<Campaign | null> {
-    await this.ensureConnection();
-    const campaign = await this.campaigns.findOne({ _id: new ObjectId(id) });
+    await this.ensureConnected();
+    if (!this.collections.campaigns) throw new Error('Campaigns collection is not initialized');
+    const campaign: any = await this.collections.campaigns.findOne({ _id: new ObjectId(id) } as any);
     if (!campaign) return null;
-    
-    // Convert ObjectId to string for frontend
-    return {
-      ...campaign,
-      _id: campaign._id?.toString()
-    };
+    return { ...campaign, _id: campaign._id?.toString() } as any;
   }
-  
-  /**
-   * Update a campaign
-   * @param id Campaign ID
-   * @param updates Campaign updates
-   */
+
   public async updateCampaign(id: string, updates: UpdateCampaignData): Promise<Campaign | null> {
-    await this.ensureConnection();
-    
-    const updateData: any = {
-      ...updates,
-      updatedAt: new Date()
-    };
-    
-    // Convert date strings to Date objects if present
-    if (updates.scheduledAt) {
-      updateData.scheduledAt = new Date(updates.scheduledAt);
+    await this.ensureConnected();
+    if (!this.collections.campaigns) throw new Error('Campaigns collection is not initialized');
+    const updateData: any = { ...updates, updatedAt: new Date() };
+    if ((updates as any).scheduledAt) updateData.scheduledAt = new Date((updates as any).scheduledAt);
+    if ((updates as any).recurringPattern?.endDate) {
+      updateData.recurringPattern = { ...(updates as any).recurringPattern, endDate: new Date((updates as any).recurringPattern.endDate) };
     }
-    
-    if (updates.recurringPattern?.endDate) {
-      updateData.recurringPattern = {
-        ...updates.recurringPattern,
-        endDate: new Date(updates.recurringPattern.endDate)
-      };
-    } else if (updates.recurringPattern) {
-      updateData.recurringPattern = updates.recurringPattern;
-    }
-    
-    // Update target count if leadIds are updated
-    if (updates.leadIds) {
-      updateData.targetCount = updates.leadIds.length;
-    }
-    
-    const result = await this.campaigns.findOneAndUpdate(
-      { _id: new ObjectId(id) },
+    if ((updates as any).leadIds) updateData.targetCount = (updates as any).leadIds.length;
+
+    const result: any = await this.collections.campaigns.findOneAndUpdate(
+      { _id: new ObjectId(id) } as any,
       { $set: updateData },
-      { returnDocument: 'after' }
+      { returnDocument: 'after' as any }
     );
-    
-    if (!result) return null;
-    
-    // Convert ObjectId to string for frontend
-    return {
-      ...result,
-      _id: result._id?.toString()
-    };
+    if (!result || !result.value) return null;
+    const doc = result.value;
+    return { ...doc, _id: doc._id?.toString() } as any;
   }
-  
-  /**
-   * Delete a campaign
-   * @param id Campaign ID
-   */
+
   public async deleteCampaign(id: string): Promise<boolean> {
-    await this.ensureConnection();
-    const result = await this.campaigns.deleteOne({ _id: new ObjectId(id) });
+    await this.ensureConnected();
+    if (!this.collections.campaigns) throw new Error('Campaigns collection is not initialized');
+    const result = await this.collections.campaigns.deleteOne({ _id: new ObjectId(id) } as any);
     return result.deletedCount === 1;
   }
-  
-  /**
-   * Increment sent count for a campaign
-   * @param id Campaign ID
-   * @param amount Amount to increment (default: 1)
-   */
-  public async incrementSentCount(id: string, amount: number = 1): Promise<void> {
-    await this.ensureConnection();
-    
-    await this.campaigns.updateOne(
-      { _id: new ObjectId(id) },
-      { 
-        $inc: { sentCount: amount },
-        $set: { lastSentAt: new Date(), updatedAt: new Date() }
-      }
-    );
-  }
-  
-  /**
-   * Update campaign status
-   * @param id Campaign ID
-   * @param status New status
-   */
-  public async updateCampaignStatus(id: string, status: Campaign['status']): Promise<Campaign | null> {
-    await this.ensureConnection();
-    
-    const result = await this.campaigns.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { 
-        $set: { 
-          status, 
-          updatedAt: new Date() 
-        } 
-      },
-      { returnDocument: 'after' }
-    );
-    
-    if (!result) return null;
-    
-    return {
-      ...result,
-      _id: result._id?.toString()
-    };
-  }
-  
-  /**
-   * Get campaign statistics
-   */
+
   public async getCampaignStats(): Promise<CampaignStats> {
-    await this.ensureConnection();
-    
+    await this.ensureConnected();
+    if (!this.collections.campaigns) throw new Error('Campaigns collection is not initialized');
     const [statusCounts, totalMessages] = await Promise.all([
-      this.campaigns.aggregate([
-        {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 }
-          }
-        }
-      ]).toArray(),
-      this.campaigns.aggregate([
-        {
-          $group: {
-            _id: null,
-            totalSent: { $sum: '$sentCount' }
-          }
-        }
-      ]).toArray()
+      this.collections.campaigns.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ] as any).toArray(),
+      this.collections.campaigns.aggregate([
+        { $group: { _id: null, totalSent: { $sum: '$sentCount' } } }
+      ] as any).toArray()
     ]);
-    
-    const stats = statusCounts.reduce((acc: any, item: any) => {
-      acc[item._id] = item.count;
-      return acc;
-    }, {});
-    
+    const stats = (statusCounts as any[]).reduce((acc: any, item: any) => { acc[item._id] = item.count; return acc; }, {} as any);
     return {
-      totalCampaigns: Object.values(stats).reduce((sum: number, count: any) => sum + count, 0),
+      totalCampaigns: Object.values(stats).reduce((sum: number, count: any) => sum + (count as number), 0) as number,
       activeCampaigns: stats.active || 0,
-      scheduledCampaigns: stats.scheduled || 0,
       completedCampaigns: stats.completed || 0,
-      totalMessagesSent: totalMessages[0]?.totalSent || 0,
-      averageDeliveryRate: 100 // This would need to be calculated based on delivery receipts
-    };
-  }
-  
-  /**
-   * Get campaigns that are ready to be sent (for scheduler)
-   */
-  public async getScheduledCampaigns(): Promise<Campaign[]> {
-    await this.ensureConnection();
-    
-    const now = new Date();
-    const campaigns = await this.campaigns
-      .find({
-        status: 'scheduled',
-        scheduledAt: { $lte: now }
-      })
-      .toArray();
-    
-    return campaigns.map(campaign => ({
-      ...campaign,
-      _id: campaign._id?.toString()
-    }));
-  }
-  
-  /**
-   * Get leads by IDs (for campaign processing)
-   * @param leadIds Array of lead IDs
-   */
-  public async getLeadsByIds(leadIds: string[]): Promise<any[]> {
-    await this.ensureConnection();
-    
-    const objectIds = leadIds.map(id => new ObjectId(id));
-    const leads = await this.leads
-      .find({ _id: { $in: objectIds } })
-      .toArray();
-    
-    return leads.map(lead => ({
-      ...lead,
-      _id: lead._id?.toString()
-    }));
-  }
-  
-  /**
-   * Ensure database connection is established
-   */
-  private async ensureConnection(): Promise<void> {
-    if (!this.isConnected) {
-      await this.connect();
-    }
+      totalSent: (totalMessages as any)[0]?.totalSent || 0
+    } as any;
   }
 }
 
-// Export a default instance
+// Export singleton instance
 export default MongoDBService.getInstance();
