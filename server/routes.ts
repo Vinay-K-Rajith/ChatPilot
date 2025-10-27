@@ -64,13 +64,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Public chat endpoint (for landing page)
   app.post('/api/chat', async (req, res) => {
     try {
-      const { message } = req.body;
+      const { message, user } = req.body as { message?: string; user?: { name?: string; phone?: string } };
       if (!message) {
         return res.status(400).json({ error: 'Message is required' });
       }
 
+      // Determine identity: use phone if provided, otherwise IP
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || 'unknown';
+      const identifier = user?.phone && user?.phone.trim().length > 0 ? user.phone : ip;
+
+      // Store user message
+      await mongodbService.addMessageToChatHistory(identifier, 'user', message, {
+        customerName: user?.name,
+        phone: user?.phone,
+        ip: user?.phone ? undefined : ip,
+      });
+
       // Get response from knowledge base
       const response = await openaiService.generateFromKnowledgeBase(message);
+
+      // Store assistant response
+      await mongodbService.addMessageToChatHistory(identifier, 'assistant', response, {
+        customerName: user?.name,
+        phone: user?.phone,
+        ip: user?.phone ? undefined : ip,
+      });
+
       res.json({ response });
     } catch (error) {
       console.error('Chat error:', error);

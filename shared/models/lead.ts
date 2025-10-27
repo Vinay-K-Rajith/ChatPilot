@@ -67,7 +67,8 @@ export interface LeadFilters {
 export interface PaginationOptions {
   page?: number;
   limit?: number;
-  sortBy?: keyof Lead;
+  // Relax to generic string to align server query passthrough and avoid TS mismatch
+  sortBy?: string;
   sortOrder?: 'asc' | 'desc';
 }
 

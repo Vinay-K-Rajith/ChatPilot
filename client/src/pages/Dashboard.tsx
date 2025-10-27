@@ -1,81 +1,145 @@
+import { useEffect, useMemo, useState } from "react";
 import StatCard from "@/components/StatCard";
 import AnalyticsChart from "@/components/AnalyticsChart";
 import ConversationList from "@/components/ConversationList";
 import { Users, MessageSquare, TrendingUp, Target } from "lucide-react";
+import { safeFetch } from "@/utils/api";
+
+type LeadsResponse = { total: number } & Record<string, any>;
+
+type CampaignStats = {
+  totalCampaigns: number;
+  activeCampaigns: number;
+  completedCampaigns: number;
+  totalSent: number;
+};
+
+type ChatHistory = { lastInteraction?: string | Date };
+
+const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function Dashboard() {
+  const [totals, setTotals] = useState({
+    totalLeads: 0,
+    convertedLeads: 0,
+    activeConversations: 0,
+    campaignStats: { totalCampaigns: 0, activeCampaigns: 0, completedCampaigns: 0, totalSent: 0 } as CampaignStats,
+  });
+
+  const [conversationData, setConversationData] = useState<Array<{ name: string; value: number }>>(
+    Array.from({ length: 7 }).map((_, i) => ({ name: dayLabels[(new Date().getDay() - (6 - i) + 7) % 7], value: 0 }))
+  );
+
+  const [conversionData, setConversionData] = useState<Array<{ name: string; value: number }>>([
+    { name: "New", value: 0 },
+    { name: "Contacted", value: 0 },
+    { name: "Qualified", value: 0 },
+    { name: "Converted", value: 0 },
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadData() {
+      try {
+        const [allLeads, converted, newL, contacted, qualified, chats, campStats] = await Promise.all([
+          safeFetch<LeadsResponse>(`/api/leads?limit=1`),
+          safeFetch<LeadsResponse>(`/api/leads?status=converted&limit=1`),
+          safeFetch<LeadsResponse>(`/api/leads?status=new&limit=1`),
+          safeFetch<LeadsResponse>(`/api/leads?status=contacted&limit=1`),
+          safeFetch<LeadsResponse>(`/api/leads?status=qualified&limit=1`),
+          fetch(`/api/chat-history?limit=1000`).then(r => r.json() as Promise<ChatHistory[]>),
+          safeFetch<CampaignStats>(`/api/campaigns-stats`),
+        ]);
+
+        if (cancelled) return;
+
+        // Active conversations: last interaction within 24h
+        const now = new Date();
+        const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const activeConversations = (chats || []).filter(c => {
+          const d = c?.lastInteraction ? new Date(c.lastInteraction) : undefined;
+          return d && d >= cutoff;
+        }).length;
+
+        // Conversation volume last 7 days
+        const counts = new Array(7).fill(0);
+        (chats || []).forEach(c => {
+          const d = c?.lastInteraction ? new Date(c.lastInteraction) : undefined;
+          if (!d) return;
+          const diffDays = Math.floor((now.getTime() - d.getTime()) / (24 * 60 * 60 * 1000));
+          if (diffDays >= 0 && diffDays < 7) {
+            counts[6 - diffDays] += 1; // align to last 7 days timeline
+          }
+        });
+        const convData = counts.map((val, idx) => {
+          const dayIdx = (now.getDay() - (6 - idx) + 7) % 7;
+          return { name: dayLabels[dayIdx], value: val };
+        });
+
+        // Conversion funnel from lead counts by status
+        const funnel = [
+          { name: "New", value: newL.total || 0 },
+          { name: "Contacted", value: contacted.total || 0 },
+          { name: "Qualified", value: qualified.total || 0 },
+          { name: "Converted", value: converted.total || 0 },
+        ];
+
+        setTotals({
+          totalLeads: allLeads.total || 0,
+          convertedLeads: converted.total || 0,
+          activeConversations,
+          campaignStats: campStats,
+        });
+        setConversationData(convData);
+        setConversionData(funnel);
+      } catch (e) {
+        console.error("Failed to load dashboard data", e);
+      }
+    }
+
+    loadData();
+    const id = setInterval(loadData, 60_000); // refresh every minute
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const conversionRate = useMemo(() => {
+    if (!totals.totalLeads) return 0;
+    return Math.round((totals.convertedLeads / totals.totalLeads) * 100);
+  }, [totals.totalLeads, totals.convertedLeads]);
+
+  const campaignPerformance = useMemo(() => {
+    const t = totals.campaignStats.totalCampaigns || 0;
+    if (!t) return 0;
+    return Math.round(((totals.campaignStats.completedCampaigns || 0) / t) * 100);
+  }, [totals.campaignStats]);
+
   const stats = [
     {
       title: "Total Leads",
-      value: "2,543",
+      value: totals.totalLeads.toLocaleString(),
       icon: Users,
-      trend: { value: 12.5, isPositive: true },
       description: "Active leads in pipeline",
     },
     {
       title: "Active Conversations",
-      value: "847",
+      value: totals.activeConversations,
       icon: MessageSquare,
-      trend: { value: 8.2, isPositive: true },
-      description: "Ongoing chats",
+      description: "Last 24h",
     },
     {
       title: "Conversion Rate",
-      value: "24.3%",
+      value: `${conversionRate}%`,
       icon: TrendingUp,
-      trend: { value: 3.1, isPositive: true },
       description: "Lead to customer",
     },
     {
       title: "Campaign Performance",
-      value: "89%",
+      value: `${campaignPerformance}%`,
       icon: Target,
-      trend: { value: -2.4, isPositive: false },
-      description: "Average open rate",
+      description: "Completed / Total",
     },
-  ];
-
-  const conversationData = [
-    { name: 'Mon', value: 45 },
-    { name: 'Tue', value: 52 },
-    { name: 'Wed', value: 61 },
-    { name: 'Thu', value: 58 },
-    { name: 'Fri', value: 70 },
-    { name: 'Sat', value: 48 },
-    { name: 'Sun', value: 42 },
-  ];
-
-  const conversionData = [
-    { name: 'New', value: 1200 },
-    { name: 'Contacted', value: 950 },
-    { name: 'Qualified', value: 620 },
-    { name: 'Converted', value: 292 },
-  ];
-
-  const recentConversations = [
-    {
-      id: "1",
-      leadName: "Sarah Johnson",
-      lastMessage: "Yes, I'm interested in the premium package",
-      timestamp: new Date(Date.now() - 1000 * 60 * 5),
-      status: "active" as const,
-      unread: 2,
-    },
-    {
-      id: "2",
-      leadName: "Mike Chen",
-      lastMessage: "Can you send me more details?",
-      timestamp: new Date(Date.now() - 1000 * 60 * 30),
-      status: "waiting" as const,
-    },
-    {
-      id: "3",
-      leadName: "Emma Davis",
-      lastMessage: "Thank you for the information",
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2),
-      status: "closed" as const,
-    },
-  ];
+  ] as const;
 
   return (
     <div className="p-6 space-y-6">
@@ -121,14 +185,14 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold mb-4">Quick Stats</h2>
           <div className="space-y-4">
             <div className="p-4 rounded-lg bg-card border border-card-border">
-              <div className="text-sm text-muted-foreground">Response Time</div>
-              <div className="text-2xl font-bold mt-1">2.3 min</div>
-              <div className="text-xs text-chart-3 mt-1">-15% faster</div>
+              <div className="text-sm text-muted-foreground">Total Campaigns</div>
+              <div className="text-2xl font-bold mt-1">{totals.campaignStats.totalCampaigns}</div>
+              <div className="text-xs text-muted-foreground mt-1">Sent: {totals.campaignStats.totalSent}</div>
             </div>
             <div className="p-4 rounded-lg bg-card border border-card-border">
-              <div className="text-sm text-muted-foreground">AI Accuracy</div>
-              <div className="text-2xl font-bold mt-1">94.5%</div>
-              <div className="text-xs text-chart-3 mt-1">+2.1% improvement</div>
+              <div className="text-sm text-muted-foreground">Active Campaigns</div>
+              <div className="text-2xl font-bold mt-1">{totals.campaignStats.activeCampaigns}</div>
+              <div className="text-xs text-muted-foreground mt-1">Completed: {totals.campaignStats.completedCampaigns}</div>
             </div>
           </div>
         </div>

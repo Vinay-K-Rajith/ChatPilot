@@ -206,13 +206,13 @@ export class MongoDBService {
   }
 
   // Chat History Methods
-  public async getChatHistory(phone: string): Promise<ChatHistory[]> {
+  public async getChatHistory(phoneOrIp: string): Promise<ChatHistory | null> {
     await this.ensureConnected();
     if (!this.collections.chatHistory) {
       throw new Error('ChatHistory collection is not initialized');
     }
-    const history = await this.collections.chatHistory.find({ phone }).toArray();
-    return history;
+    const history = await this.collections.chatHistory.findOne({ phoneNumber: phoneOrIp } as any);
+    return history as any;
   }
   
   public async storeChatMessage(chat: Omit<ChatHistory, 'createdAt'>): Promise<void> {
@@ -327,16 +327,20 @@ export class MongoDBService {
   }
 
   // ============== Chat History Methods (extended) ==============
-  public async addMessageToChatHistory(phoneNumber: string, role: 'user' | 'assistant', content: string): Promise<void> {
+  public async addMessageToChatHistory(phoneNumberOrIp: string, role: 'user' | 'assistant', content: string, opts?: { customerName?: string; phone?: string; ip?: string }): Promise<void> {
     await this.ensureConnected();
     if (!this.collections.chatHistory) throw new Error('ChatHistory collection is not initialized');
     const message = { role, content, timestamp: new Date() } as any;
+    const setOps: any = { lastInteraction: new Date() };
+    if (opts?.customerName) setOps['metadata.customerName'] = opts.customerName;
+    if (opts?.phone) setOps['metadata.phone'] = opts.phone;
+    if (opts?.ip) setOps['metadata.ip'] = opts.ip;
     await this.collections.chatHistory.updateOne(
-      { phoneNumber },
+      { phoneNumber: phoneNumberOrIp } as any,
       {
         $push: { messages: message },
-        $set: { lastInteraction: new Date() },
-        $setOnInsert: { metadata: {} }
+        $set: setOps,
+        $setOnInsert: { phoneNumber: phoneNumberOrIp }
       },
       { upsert: true }
     );

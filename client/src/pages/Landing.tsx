@@ -39,6 +39,10 @@ export default function Landing() {
     const used = parseInt(localStorage.getItem('usedMessages') || '0');
     return Math.max(0, 10 - used);
   });
+  // UI state for smooth welcome->chat transition
+  const [hasChatted, setHasChatted] = useState(false);
+  // Previous chat (for logged-in users)
+  const [previousChat, setPreviousChat] = useState<{ messages: Array<{ role: 'user'|'assistant'; content: string; timestamp?: string }>; customerName?: string } | null>(null);
   
   const [, navigate] = useLocation();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -90,6 +94,24 @@ export default function Landing() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Fetch previous chat for logged-in user
+  useEffect(() => {
+    const authed = localStorage.getItem('auth') === 'true';
+    if (!authed) return;
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || '{}');
+      if (!u?.phone) return;
+      fetch(`/api/chat-history/${encodeURIComponent(u.phone)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data && data.messages) {
+            setPreviousChat({ messages: data.messages, customerName: data?.metadata?.customerName });
+          }
+        })
+        .catch(() => {});
+    } catch {}
+  }, []);
+
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -105,27 +127,35 @@ export default function Landing() {
       return;
     }
 
+    // mark that the conversation has started for smooth transition
+    if (!hasChatted) setHasChatted(true);
+
     const userMessage = { id: messages.length + 1, type: 'user' as const, text: input };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsTyping(true);
 
     try {
+      const isAuthedUser = localStorage.getItem('auth') === 'true';
+      const user = isAuthedUser ? JSON.parse(localStorage.getItem('user') || '{}') : undefined;
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ message: input }),
+        body: JSON.stringify({ message: input, user }),
       });
 
       const data = await response.json();
       
       setIsTyping(false);
+      const botText = response.ok && typeof data.response === 'string' && data.response.trim().length > 0
+        ? data.response
+        : "I'm sorry, I encountered an error. Please try again later.";
       setMessages(prev => [...prev, {
         id: prev.length + 2,
         type: 'bot',
-        text: data.response,
+        text: botText,
         animated: true,
       }]);
 
@@ -288,24 +318,50 @@ export default function Landing() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col">
-        {/* Messages Area + Hero */}
+      {/* Messages Area + Hero */}
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           <div className="max-w-[1280px] mx-auto px-4 py-8">
-            {messages.length === 1 ? (
-              <>
-                {/* Hero */}
-                <section className="min-h-[40vh] flex items-start justify-center md:justify-start pt-24 md:pt-32">
-                  <div className="w-full max-w-4xl">
-                    <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight gradient-text" style={{ fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
-                      Welcome to GMT's ChatPilot
-                    </h1>
-                    <p className="mt-2 md:mt-3 text-sm md:text-lg" style={{ color: currentTheme.textSecondary }}>
-                      Your AI assistant for professional customer conversations and insights.
-                    </p>
+            {/* Hero (stays mounted and fades out when chat starts) */}
+            <section
+              className={[
+                'flex items-center justify-center pt-24 md:pt-32 transition-all duration-500',
+                hasChatted ? 'opacity-0 translate-y-[-16px] h-0 py-0 mb-0 overflow-hidden' : 'min-h-[40vh] opacity-100'
+              ].join(' ')}
+            >
+              <div className="w-full max-w-4xl text-center">
+                <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight gradient-text" style={{ fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
+                  Welcome to GMT's ChatPilot
+                </h1>
+                <p className="mt-2 md:mt-3 text-sm md:text-lg" style={{ color: currentTheme.textSecondary }}>
+                  Your AI assistant for professional customer conversations and insights.
+                </p>
+
+                {/* Previous chat access for logged-in users */}
+                {localStorage.getItem('auth') === 'true' && previousChat?.messages?.length ? (
+                  <div className="mt-6 flex items-center justify-center">
+                    <button
+                      onClick={() => {
+                        const baseId = messages.length + 1;
+                        const converted = previousChat!.messages.map((m, idx) => ({
+                          id: baseId + idx,
+                          type: m.role === 'assistant' ? 'bot' : 'user',
+                          text: m.content
+                        } as Message));
+                        setMessages(prev => prev.length > 1 ? prev : [prev[0], ...converted]);
+                        setHasChatted(true);
+                      }}
+                      className="px-4 py-2 rounded-lg text-sm font-medium transition-all border hover-elevate"
+                      style={{ color: currentTheme.textPrimary, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)', borderColor: currentTheme.border }}
+                    >
+                      Continue previous conversation
+                    </button>
                   </div>
-                </section>
-              </>
-            ) : (
+                ) : null}
+              </div>
+            </section>
+
+            {/* Messages list */}
+            {messages.length > 0 && (
               <>
                 {messages.map((message) => (
                   <div key={message.id} className="mb-5">

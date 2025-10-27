@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // Campaign types
 export type CampaignType = "broadcast" | "drip" | "trigger";
-export type CampaignStatus = "draft" | "scheduled" | "active" | "paused" | "completed";
+export type CampaignStatus = "draft" | "scheduled" | "active" | "paused" | "completed" | "sending";
 export type ScheduleType = "immediate" | "scheduled" | "recurring";
 export type MediaType = "image" | "video" | "document";
 
@@ -83,9 +83,16 @@ export const CreateCampaignSchema = z.object({
   createdBy: z.string(),
 });
 
-export const UpdateCampaignSchema = CreateCampaignSchema.partial().omit({
-  createdBy: true,
-});
+// Allow updating status and optional operational fields
+export const UpdateCampaignSchema = CreateCampaignSchema.partial()
+  .extend({
+status: z.enum(["draft", "scheduled", "active", "paused", "completed", "sending"]).optional(),
+    // operational fields that might be set by the server when sending
+    sentAt: z.any().optional(),
+  })
+  .omit({
+    createdBy: true,
+  });
 
 export type CreateCampaignData = z.infer<typeof CreateCampaignSchema>;
 export type UpdateCampaignData = z.infer<typeof UpdateCampaignSchema>;

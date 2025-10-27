@@ -5,11 +5,13 @@ export interface ChatMessage {
 }
 
 export interface ChatHistory {
-  phoneNumber: string;
+  phoneNumber: string; // Can be an actual phone number or an IP identifier
   messages: ChatMessage[];
   lastInteraction: Date;
   metadata?: {
     customerName?: string;
+    phone?: string;
+    ip?: string;
     labels?: string[];
   };
 }
