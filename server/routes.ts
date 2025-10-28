@@ -7,7 +7,7 @@ import { storage } from "./storage";
 import { TwilioService } from "./services/twilio.service";
 import { MongoDBService } from "./services/mongodb.service";
 import { OpenAIService } from "./services/openai.service";
-
+import { TwilioContentService } from "./services/twilioContent.service";
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize services
   const mongodbService = MongoDBService.getInstance();
@@ -267,6 +267,95 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // API routes
   app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
+  });
+
+  // WhatsApp Template submission via Twilio Content API
+  app.post('/api/whatsapp/templates/submit', async (req: Request, res: Response) => {
+    try {
+      const svc = TwilioContentService.getInstance();
+      const { language, friendly_name, types, variables, name, category } = req.body || {};
+      if (!language || !types || !name || !category) {
+        return res.status(400).json({ success: false, error: 'Missing required fields: language, types, name, category' });
+      }
+
+      // Extract body and media from types
+      const body = types['twilio/text']?.body || types['twilio/media']?.body || '';
+      const mediaUrl = types['twilio/media']?.media?.[0];
+
+      // 1) Create Content resource
+      const created = await svc.createContent({ language, friendly_name, types, variables });
+      if (!created.success) return res.status(502).json(created);
+
+      // 2) Submit for WhatsApp approval
+      const approval = await svc.submitForApproval(created.contentSid!, { name, category });
+      if (!approval.success) return res.status(502).json(approval);
+
+      // 3) Save to MongoDB (metadata only, status will be fetched from Twilio)
+      try {
+        await mongodbService.saveWhatsAppTemplate({
+          contentSid: created.contentSid!,
+          approvalSid: approval.approvalSid,
+          name,
+          friendlyName: friendly_name,
+          language,
+          category,
+          body,
+          mediaUrl,
+          variables
+        });
+      } catch (dbError) {
+        console.error('Failed to save template to DB:', dbError);
+        // Don't fail the request if DB save fails
+      }
+
+      return res.json({ success: true, provider: 'twilio', contentSid: created.contentSid, approvalSid: approval.approvalSid, status: approval.status });
+    } catch (error) {
+      console.error('Template submit error:', error);
+      res.status(500).json({ success: false, error: 'Failed to submit template' });
+    }
+  });
+
+  // Get Content/Approval status
+  app.get('/api/whatsapp/templates/:sid/status', async (req: Request<{sid: string}>, res: Response) => {
+    try {
+      const svc = TwilioContentService.getInstance();
+      const status = await svc.getStatus(req.params.sid);
+      if (!status.success) return res.status(502).json(status);
+      res.json(status);
+    } catch (error) {
+      console.error('Get template status error:', error);
+      res.status(500).json({ success: false, error: 'Failed to get status' });
+    }
+  });
+
+  // List all WhatsApp templates with live status from Twilio
+  app.get('/api/whatsapp/templates', async (req: Request<{}, {}, {}, {limit?: string}>, res: Response) => {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit) : undefined;
+      const templates = await mongodbService.getWhatsAppTemplates(limit);
+      
+      // Fetch live status from Twilio for each template
+      const svc = TwilioContentService.getInstance();
+      const templatesWithStatus = await Promise.all(
+        templates.map(async (template) => {
+          try {
+            const statusResult = await svc.getStatus(template.contentSid);
+            return {
+              ...template,
+              status: statusResult.success ? statusResult.status : 'unknown'
+            };
+          } catch (error) {
+            console.error(`Failed to fetch status for ${template.contentSid}:`, error);
+            return { ...template, status: 'unknown' };
+          }
+        })
+      );
+      
+      res.json({ success: true, templates: templatesWithStatus });
+    } catch (error) {
+      console.error('Get templates error:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch templates' });
+    }
   });
 
   // Send message endpoint

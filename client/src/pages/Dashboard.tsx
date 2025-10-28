@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import StatCard from "@/components/StatCard";
 import AnalyticsChart from "@/components/AnalyticsChart";
 import ConversationList from "@/components/ConversationList";
+import TemplateStatus from "@/components/TemplateStatus";
 import { Users, MessageSquare, TrendingUp, Target } from "lucide-react";
 import { safeFetch } from "@/utils/api";
 
@@ -179,7 +180,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <h2 className="text-lg font-semibold mb-4">Recent Activity</h2>
-          <ConversationList />
+          <ConversationList limit={3} />
         </div>
         <div>
           <h2 className="text-lg font-semibold mb-4">Quick Stats</h2>
@@ -196,6 +197,11 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold mb-4">WhatsApp Template Status</h2>
+        <TemplateStatus limit={5} />
       </div>
     </div>
   );

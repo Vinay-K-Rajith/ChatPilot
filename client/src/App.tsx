@@ -16,7 +16,7 @@ import Campaigns from "@/pages/Campaigns";
 import Analytics from "@/pages/Analytics";
 import KnowledgeBase from "@/pages/KnowledgeBase";
 import AISettings from "@/pages/AISettings";
-import Testing from "@/pages/Testing";
+import Templates from "@/pages/Templates";
 import NotFound from "@/pages/not-found";
 
 import { isAuthed, validateSession } from "./lib/auth";
@@ -68,7 +68,7 @@ function Router() {
       <Route path="/analytics" component={() => <ProtectedRoute component={Analytics} />} />
       <Route path="/knowledge" component={() => <ProtectedRoute component={KnowledgeBase} />} />
       <Route path="/ai-settings" component={() => <ProtectedRoute component={AISettings} />} />
-      <Route path="/testing" component={() => <ProtectedRoute component={Testing} />} />
+      <Route path="/templates" component={() => <ProtectedRoute component={Templates} />} />
       <Route component={NotFound} />
     </Switch>
   );

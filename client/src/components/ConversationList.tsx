@@ -6,13 +6,16 @@ import { cn } from "@/lib/utils";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import { User } from "lucide-react";
 
-export default function ConversationList({ onSelect, selectedId }: { 
+export default function ConversationList({ onSelect, selectedId, limit }: { 
   onSelect?: (phoneNumber: string) => void;
   selectedId?: string;
+  limit?: number;
 }) {
   const { chatHistories, isLoading } = useChatHistory({
     refetchInterval: 5000 // Refresh every 5 seconds
   });
+
+  const displayedChats = limit ? chatHistories.slice(0, limit) : chatHistories;
 
   const getStatusColor = (metadata?: { labels?: string[] }) => {
     if (!metadata?.labels?.length) return "bg-muted";
@@ -30,7 +33,7 @@ export default function ConversationList({ onSelect, selectedId }: {
 
   return (
     <div className="space-y-2">
-      {chatHistories.map((chat) => (
+      {displayedChats.map((chat) => (
         <Card
           key={chat.phoneNumber}
           className={cn(

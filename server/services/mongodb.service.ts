@@ -25,6 +25,20 @@ import type {
 dotenv.config();
 
 // Types for MongoDB service
+export interface WhatsAppTemplate {
+  _id?: ObjectId;
+  contentSid: string;
+  approvalSid?: string;
+  name: string;
+  friendlyName?: string;
+  language: string;
+  category: string;
+  body: string;
+  mediaUrl?: string;
+  variables?: Record<string, string>;
+  createdAt: Date;
+}
+
 type MongoDBCollections = {
   customers?: Collection<Customer>;
   products?: Collection<Product>;
@@ -35,6 +49,7 @@ type MongoDBCollections = {
   chatHistory?: Collection<ChatHistory>;
   gmt_cust?: Collection<GMTCustomer>;
   gmt_otp?: Collection<OTPRecord>;
+  whatsappTemplates?: Collection<WhatsAppTemplate>;
 };
 
 // Define interfaces for our data models
@@ -133,7 +148,8 @@ export class MongoDBService {
         leads: db.collection<ServerLead>('GMT_Leads'),
         campaigns: db.collection<ServerCampaign>('Campaigns'),
         gmt_cust: db.collection<GMTCustomer>('GMT_Cust'),
-        gmt_otp: db.collection<OTPRecord>('GMT_OTP')
+        gmt_otp: db.collection<OTPRecord>('GMT_OTP'),
+        whatsappTemplates: db.collection<WhatsAppTemplate>('WhatsApp_Templates')
       };
 
       // Create indexes for chat history
@@ -184,6 +200,10 @@ export class MongoDBService {
       // Create indexes for GMT_OTP
       await this.collections.gmt_otp?.createIndex({ phone: 1 });
       await this.collections.gmt_otp?.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+      // Create indexes for WhatsApp Templates
+      await this.collections.whatsappTemplates?.createIndex({ contentSid: 1 }, { unique: true });
+      await this.collections.whatsappTemplates?.createIndex({ createdAt: -1 });
 
       this.isConnected = true;
       console.log('Connected to MongoDB');
@@ -775,6 +795,35 @@ export class MongoDBService {
       completedCampaigns: stats.completed || 0,
       totalSent: (totalMessages as any)[0]?.totalSent || 0
     } as any;
+  }
+
+  // ============== WhatsApp Templates ==============
+  public async saveWhatsAppTemplate(templateData: Omit<WhatsAppTemplate, '_id' | 'createdAt'>): Promise<WhatsAppTemplate> {
+    await this.ensureConnected();
+    if (!this.collections.whatsappTemplates) throw new Error('WhatsApp Templates collection is not initialized');
+    const now = new Date();
+    const template: WhatsAppTemplate = {
+      ...templateData,
+      createdAt: now
+    };
+    const result = await this.collections.whatsappTemplates.insertOne(template as any);
+    return { ...template, _id: result.insertedId };
+  }
+
+  public async getWhatsAppTemplates(limit?: number): Promise<WhatsAppTemplate[]> {
+    await this.ensureConnected();
+    if (!this.collections.whatsappTemplates) throw new Error('WhatsApp Templates collection is not initialized');
+    const query = this.collections.whatsappTemplates.find({}).sort({ createdAt: -1 });
+    if (limit) query.limit(limit);
+    const templates = await query.toArray();
+    return templates.map(t => ({ ...t, _id: t._id?.toString() })) as any;
+  }
+
+  public async getWhatsAppTemplateByContentSid(contentSid: string): Promise<WhatsAppTemplate | null> {
+    await this.ensureConnected();
+    if (!this.collections.whatsappTemplates) throw new Error('WhatsApp Templates collection is not initialized');
+    const template = await this.collections.whatsappTemplates.findOne({ contentSid });
+    return template ? { ...template, _id: template._id?.toString() } as any : null;
   }
 }
 

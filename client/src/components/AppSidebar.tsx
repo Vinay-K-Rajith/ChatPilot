@@ -8,7 +8,7 @@ import {
   BookOpen,
   Settings,
   Bot,
-  TestTube,
+  FileText,
   LogOut,
 } from "lucide-react";
 import { logout } from "@/lib/auth";
@@ -72,9 +72,9 @@ const settingsItems: MenuItem[] = [
     icon: Bot,
   },
   {
-    title: "Testing",
-    url: "/testing",
-    icon: TestTube,
+    title: "WhatsApp Templates",
+    url: "/templates",
+    icon: FileText,
   },
   {
     title: "Logout",
