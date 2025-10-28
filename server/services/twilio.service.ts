@@ -65,39 +65,48 @@ export class TwilioService {
   }
 
   public async handleIncomingMessage(from: string, message: string): Promise<void> {
-    try {
-      console.log(`Received message from ${from}: ${message}`);
-      const e164 = from.replace('whatsapp:', '');
-      
-      // Store user message in chat history (store without whatsapp: prefix)
-      await this.mongodbService.addMessageToChatHistory(e164, 'user', message);
+    // Process asynchronously to return webhook response immediately
+    setImmediate(async () => {
+      try {
+        console.log(`Received message from ${from}: ${message}`);
+        const e164 = from.replace('whatsapp:', '');
+        
+        // Store user message in chat history (store without whatsapp: prefix)
+        await this.mongodbService.addMessageToChatHistory(e164, 'user', message, {
+          phone: e164,
+          channel: 'whatsapp',
+          labels: ['whatsapp']
+        });
 
-      // Get chat history for context
-      const chatHistory = await this.mongodbService.getChatHistory(e164);
-      const conversationHistory = chatHistory?.messages || [];
+        // Get chat history for context
+        const chatHistory = await this.mongodbService.getChatHistory(e164);
+        const conversationHistory = chatHistory?.messages || [];
 
-      // Get relevant knowledge base context
-      const knowledgeContext = await this.mongodbService.getRelevantKnowledge(message);
+        // Get relevant knowledge base context
+        const knowledgeContext = await this.mongodbService.getRelevantKnowledge(message);
 
-      // Generate AI response
-      const aiResponse = await this.openaiService.generateResponse(
-        message,
-        conversationHistory.map(m => ({ role: m.role, content: m.content })),
-        knowledgeContext
-      );
+        // Generate AI response
+        const aiResponse = await this.openaiService.generateResponse(
+          message,
+          conversationHistory.map(m => ({ role: m.role, content: m.content })),
+          knowledgeContext
+        );
 
-      // Store AI response in chat history
-      await this.mongodbService.addMessageToChatHistory(e164, 'assistant', aiResponse);
+        // Store AI response in chat history
+        await this.mongodbService.addMessageToChatHistory(e164, 'assistant', aiResponse, {
+          phone: e164,
+          channel: 'whatsapp',
+          labels: ['whatsapp']
+        });
 
-      // Send AI response back to customer (ensure proper whatsapp: addressing)
-      await this.sendMessage(e164, aiResponse);
-
-    } catch (error) {
-      console.error('Error handling incoming message:', error);
-      
-      // Send error message to customer
-      await this.sendMessage(from, 'Sorry, I encountered an error. Please try again later.');
-    }
+        // Send AI response back to customer (ensure proper whatsapp: addressing)
+        await this.sendMessage(e164, aiResponse);
+      } catch (error) {
+        console.error('Error handling incoming message:', error);
+        // Best-effort error notification
+        try { await this.sendMessage(from, 'Sorry, I encountered an error. Please try again later.'); } catch {}
+      }
+    });
   }
 
   public async sendIntroduction(to: string): Promise<void> {

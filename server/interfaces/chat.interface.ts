@@ -13,5 +13,6 @@ export interface ChatHistory {
     phone?: string;
     ip?: string;
     labels?: string[];
+    channel?: string; // e.g., 'whatsapp', 'web'
   };
 }
