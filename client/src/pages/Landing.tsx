@@ -32,6 +32,9 @@ export default function Landing() {
   const [showLogin, setShowLogin] = useState(false);
   const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp: '' });
   const [showOtpInput, setShowOtpInput] = useState(false);
+  const [otpRequested, setOtpRequested] = useState(false);
+  const [isRequestingOtp, setIsRequestingOtp] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [showUserPopup, setShowUserPopup] = useState(false);
   const [remainingMessages, setRemainingMessages] = useState(() => {
     const authed = localStorage.getItem('auth') === 'true';
@@ -188,7 +191,9 @@ export default function Landing() {
   };
 
   const handleRequestOtp = async () => {
-    if (!loginData.phone || !loginData.name) return;
+    if (!loginData.phone || !loginData.name || isRequestingOtp) return;
+    setLoginError(null);
+    setIsRequestingOtp(true);
 
     try {
       const response = await fetch('/api/request-otp', {
@@ -204,9 +209,16 @@ export default function Landing() {
 
       if (response.ok) {
         setShowOtpInput(true);
+        setOtpRequested(true);
+      } else {
+        const data = await response.json().catch(() => ({}));
+        setLoginError((data && (data.error || data.message)) || 'Failed to send OTP');
       }
     } catch (error) {
       console.error('Error requesting OTP:', error);
+      setLoginError('Failed to send OTP. Please try again.');
+    } finally {
+      setIsRequestingOtp(false);
     }
   };
 
@@ -214,6 +226,7 @@ export default function Landing() {
     if (!loginData.phone || !loginData.name || !loginData.otp) return;
 
     try {
+      setLoginError(null);
       const response = await fetch('/api/verify-otp', {
         method: 'POST',
         headers: {
@@ -223,7 +236,7 @@ export default function Landing() {
       });
 
       if (response.ok) {
-        const data = await response.json();
+        await response.json().catch(() => ({}));
         localStorage.setItem('auth', 'true');
         localStorage.setItem('user', JSON.stringify({
           name: loginData.name,
@@ -232,9 +245,13 @@ export default function Landing() {
         localStorage.removeItem('usedMessages');
         setRemainingMessages(9999);
         setShowLogin(false);
+      } else {
+        const data = await response.json().catch(() => ({}));
+        setLoginError((data && (data.error || data.message)) || 'Invalid OTP');
       }
     } catch (error) {
       console.error('Error verifying OTP:', error);
+      setLoginError('Failed to verify OTP. Please try again.');
     }
   };
 
@@ -550,8 +567,14 @@ export default function Landing() {
                     </label>
                     <input
                       type="tel"
+                      inputMode="tel"
                       value={loginData.phone}
                       onChange={(e) => setLoginData({ ...loginData, phone: e.target.value })}
+                      onBlur={() => {
+                        if (loginData.name && loginData.phone && !otpRequested) {
+                          handleRequestOtp();
+                        }
+                      }}
                       className="w-full px-4 py-2 rounded-lg border focus:outline-none"
                       style={{
                         backgroundColor: currentTheme.surfaceBg,
@@ -568,21 +591,32 @@ export default function Landing() {
                       </label>
                       <input
                         type="text"
+                        inputMode="numeric"
+                        maxLength={6}
                         value={loginData.otp}
-                        onChange={(e) => setLoginData({ ...loginData, otp: e.target.value })}
+                        onChange={(e) => setLoginData({ ...loginData, otp: e.target.value.replace(/\D/g, '') })}
                         className="w-full px-4 py-2 rounded-lg border focus:outline-none"
                         style={{
                           backgroundColor: currentTheme.surfaceBg,
                           borderColor: currentTheme.border,
                           color: currentTheme.textPrimary
                         }}
-                        placeholder="Enter OTP"
+                        placeholder="Enter 6-digit OTP"
                       />
+                      <p className="text-xs mt-2" style={{ color: currentTheme.textSecondary }}>
+                        OTP sent to {loginData.phone}. {isRequestingOtp ? 'Sending…' : otpRequested ? 'Didn\'t get it? Re-enter phone to resend.' : ''}
+                      </p>
+                    </div>
+                  )}
+                  {loginError && (
+                    <div className="text-sm bg-red-500/10 border border-red-500/30 text-red-300 px-3 py-2 rounded-lg">
+                      {loginError}
                     </div>
                   )}
                   <button
                     onClick={showOtpInput ? handleLogin : handleRequestOtp}
-                    className="w-full py-2.5 rounded-xl text-sm font-medium transition-all duration-200"
+                    disabled={showOtpInput ? !(loginData.otp && loginData.otp.length >= 4) : !(loginData.name && loginData.phone) || isRequestingOtp}
+                    className="w-full py-2.5 rounded-xl text-sm font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
                     style={{
                       backgroundColor: currentTheme.accentPrimary,
                       color: '#ffffff',
@@ -594,7 +628,7 @@ export default function Landing() {
                     onMouseLeave={(e) => {
                       e.currentTarget.style.backgroundColor = currentTheme.accentPrimary;
                     }}>
-                    {showOtpInput ? 'Login' : 'Request OTP'}
+                    {showOtpInput ? 'Verify & Continue' : (isRequestingOtp ? 'Sending OTP…' : 'Request OTP')}
                   </button>
                 </div>
               </div>

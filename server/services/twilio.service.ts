@@ -23,6 +23,21 @@ export class TwilioService {
     this.phoneNumber = config.phoneNumber;
   }
 
+  private normalizeE164(raw: string): string {
+    try {
+      let p = (raw || '').toString().trim();
+      // Strip any whatsapp: prefix and non-digits except leading '+'
+      p = p.replace(/^whatsapp:/, '');
+      if (p.startsWith('+')) return p;
+      const digits = p.replace(/\D/g, '');
+      if (!digits) return p;
+      const cc = (process.env.DEFAULT_COUNTRY_CODE || '').replace(/\D/g, '');
+      return cc ? `+${cc}${digits}` : `+${digits}`;
+    } catch {
+      return raw;
+    }
+  }
+
   public static getInstance(): TwilioService {
     if (!TwilioService.instance) {
       const config: TwilioConfig = {
@@ -47,6 +62,7 @@ export class TwilioService {
   }
 
   public async sendMessage(to: string, message: string): Promise<boolean> {
+    // Backward-compatible: defaults to WhatsApp if TWILIO_PHONE_NUMBER is set with whatsapp: prefix
     try {
       const fromAddr = this.phoneNumber.startsWith('whatsapp:') ? this.phoneNumber : `whatsapp:${this.phoneNumber}`;
       const toAddr = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
@@ -56,10 +72,27 @@ export class TwilioService {
         to: toAddr,
       });
 
-      console.log(`Message sent successfully. SID: ${result.sid}`);
+      console.log(`WhatsApp message sent. SID: ${result.sid}`);
       return true;
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error('Error sending WhatsApp message:', error);
+      return false;
+    }
+  }
+
+  public async sendSms(to: string, message: string): Promise<boolean> {
+    try {
+      const fromNumber = this.phoneNumber.replace(/^whatsapp:/, '');
+      const toNumber = this.normalizeE164(to);
+      const result = await this.client.messages.create({
+        body: message,
+        from: fromNumber,
+        to: toNumber,
+      });
+      console.log(`SMS sent successfully. SID: ${result.sid}`);
+      return true;
+    } catch (error) {
+      console.error('Error sending SMS:', error);
       return false;
     }
   }

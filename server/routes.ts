@@ -80,8 +80,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ip: user?.phone ? undefined : ip,
       });
 
-      // Get response from knowledge base
-      const response = await openaiService.generateFromKnowledgeBase(message);
+      // Pull recent chat history for context (last 20 messages)
+      const chatHistory = await mongodbService.getChatHistory(identifier);
+      const conversationHistory = (chatHistory?.messages || []).slice(-20).map(m => ({ role: m.role, content: m.content }));
+
+      // Get relevant knowledge base context for grounding
+      const knowledgeContext = await mongodbService.getRelevantKnowledge(message);
+
+      // Generate response with history and knowledge context
+      const response = await openaiService.generateResponse(message, conversationHistory as any, knowledgeContext);
 
       // Store assistant response
       await mongodbService.addMessageToChatHistory(identifier, 'assistant', response, {
@@ -111,8 +118,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Store the OTP and user info temporarily (you might want to use Redis in production)
       await mongodbService.storeOTP(phone, otp, name);
       
-      // Send OTP via Twilio
-      await twilioService.sendMessage(phone, `Your ChatPilot verification code is: ${otp}`);
+      // Send OTP via SMS using Twilio
+      const sent = await twilioService.sendSms(phone, `Your ChatPilot verification code is: ${otp}`);
+      if (!sent) {
+        return res.status(502).json({ error: 'Failed to send OTP via SMS' });
+      }
       
       res.json({ success: true });
     } catch (error) {
