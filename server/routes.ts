@@ -264,6 +264,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // AI usage analytics
+  app.get('/api/ai/usage', async (req, res) => {
+    try {
+      const { start_date, end_date } = req.query as { start_date?: string; end_date?: string };
+      const { OpenAIUsageService } = await import('./services/openaiUsage.service');
+      const svc = OpenAIUsageService.getInstance();
+      const result = await svc.getUsage({ start_date, end_date });
+      if (!result.success) return res.status(502).json(result);
+      res.json(result);
+    } catch (error) {
+      console.error('AI usage endpoint error:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch AI usage' });
+    }
+  });
+
   // API routes
   app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', timestamp: new Date().toISOString() });
@@ -328,6 +343,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Get full template details (DB metadata + Twilio Content object + live status)
+  app.get('/api/whatsapp/templates/:sid', async (req: Request<{sid: string}>, res: Response) => {
+    try {
+      const contentSid = req.params.sid;
+      const svc = TwilioContentService.getInstance();
+      const [dbTemplate, statusRes, contentRes] = await Promise.all([
+        mongodbService.getWhatsAppTemplateByContentSid(contentSid),
+        svc.getStatus(contentSid),
+        svc.getContent(contentSid)
+      ]);
+
+      if (!dbTemplate && !contentRes.success) {
+        return res.status(404).json({ success: false, error: 'Template not found' });
+      }
+
+      res.json({
+        success: true,
+        template: dbTemplate,
+        status: statusRes.success ? statusRes.status : 'unknown',
+        content: contentRes.success ? contentRes.content : undefined,
+      });
+    } catch (error) {
+      console.error('Get template details error:', error);
+      res.status(500).json({ success: false, error: 'Failed to fetch template details' });
+    }
+  });
+
   // List all WhatsApp templates with live status from Twilio
   app.get('/api/whatsapp/templates', async (req: Request<{}, {}, {}, {limit?: string}>, res: Response) => {
     try {
@@ -358,21 +400,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Send message endpoint
+  // Send message endpoint (generic)
   app.post('/api/send-message', async (req, res) => {
     try {
       const { to, message } = req.body;
-      
-      if (!to || !message) {
-        return res.status(400).json({ error: 'Missing required fields: to, message' });
-      }
-
+      if (!to || !message) return res.status(400).json({ error: 'Missing required fields: to, message' });
       const success = await twilioService.sendMessage(to, message);
-      
+      if (success) {
+        try {
+          await mongodbService.addMessageToChatHistory(to.replace(/^whatsapp:/, ''), 'assistant', message, { phone: to.replace(/^whatsapp:/, ''), channel: 'whatsapp', labels: ['whatsapp'] });
+        } catch (e) { console.warn('Failed to record outbound message:', e); }
+      }
       res.json({ success, message: success ? 'Message sent successfully' : 'Failed to send message' });
     } catch (error) {
       console.error('Send message error:', error);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // Send conversation message within 24h user-initiated session
+  app.post('/api/conversations/:phone/send', async (req: Request<{phone: string}, {}, { message?: string }>, res: Response) => {
+    try {
+      const phone = req.params.phone;
+      const { message } = req.body || {};
+      if (!phone || !message || !message.trim()) {
+        return res.status(400).json({ success: false, error: 'Missing phone or message' });
+      }
+
+      // Enforce 24h window from last inbound user message
+      const history = await mongodbService.getChatHistory(phone);
+      const lastInbound = (history?.messages || []).slice().reverse().find(m => (m as any).role === 'user');
+      const within24h = lastInbound ? (Date.now() - new Date((lastInbound as any).timestamp).getTime()) <= 24*60*60*1000 : false;
+      if (!within24h) {
+        return res.status(403).json({ success: false, error: 'Cannot send session message: last user message >24h ago. Use a WhatsApp approved template.' });
+      }
+
+      const ok = await twilioService.sendMessage(phone, message.trim());
+      if (!ok) return res.status(502).json({ success: false, error: 'Failed to send via Twilio' });
+
+      // Ensure lead exists and record outbound in chat history
+      try { await mongodbService.upsertLeadByPhone(phone, {}); } catch {}
+      await mongodbService.addMessageToChatHistory(phone, 'assistant', message.trim(), { phone, channel: 'whatsapp', labels: ['whatsapp'] });
+      return res.json({ success: true });
+    } catch (error) {
+      console.error('Conversation send error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error' });
     }
   });
 

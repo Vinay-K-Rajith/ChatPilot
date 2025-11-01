@@ -67,8 +67,8 @@ const menuItems: MenuItem[] = [
 
 const settingsItems: MenuItem[] = [
   {
-    title: "AI Settings",
-    url: "/ai-settings",
+    title: "AI Usage",
+    url: "/ai-usage",
     icon: Bot,
   },
   {

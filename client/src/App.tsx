@@ -15,7 +15,7 @@ import Leads from "@/pages/Leads";
 import Campaigns from "@/pages/Campaigns";
 import Analytics from "@/pages/Analytics";
 import KnowledgeBase from "@/pages/KnowledgeBase";
-import AISettings from "@/pages/AISettings";
+import AIUsage from "@/pages/AIUsage";
 import Templates from "@/pages/Templates";
 import NotFound from "@/pages/not-found";
 
@@ -67,7 +67,7 @@ function Router() {
       <Route path="/campaigns" component={() => <ProtectedRoute component={Campaigns} />} />
       <Route path="/analytics" component={() => <ProtectedRoute component={Analytics} />} />
       <Route path="/knowledge" component={() => <ProtectedRoute component={KnowledgeBase} />} />
-      <Route path="/ai-settings" component={() => <ProtectedRoute component={AISettings} />} />
+      <Route path="/ai-usage" component={() => <ProtectedRoute component={AIUsage} />} />
       <Route path="/templates" component={() => <ProtectedRoute component={Templates} />} />
       <Route component={NotFound} />
     </Switch>

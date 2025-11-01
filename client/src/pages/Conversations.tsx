@@ -30,47 +30,39 @@ export default function Conversations({}: ConversationsProps) {
     }
   };
 
-
   return (
-    <div className="h-full flex flex-col">
-      <div className="relative overflow-hidden">
-        <div 
-          className="absolute inset-0 bg-cover bg-center"
-          style={{
-            backgroundImage: 'url(https://images.unsplash.com/photo-1474674556023-efef886fa147?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D)',
-          }}
-        />
-        <div className="absolute inset-0 bg-gradient-to-br from-[#1E3A5F]/95 via-[#2C5F8D]/85 to-[#4A90BF]/90" />
-        <div className="relative p-6 text-white">
-          <h1 className="text-2xl font-bold">Conversations</h1>
-          <p className="text-white/80 mt-1">Manage all your WhatsApp conversations</p>
+    <div className="h-screen flex flex-col">
+      <header className="shrink-0 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="px-6 py-4">
+          <h1 className="text-xl font-semibold">Conversations</h1>
+          <p className="text-sm text-muted-foreground">Manage all your WhatsApp conversations</p>
         </div>
-      </div>
+      </header>
 
-      <div className="flex-1 flex gap-6 p-6 overflow-hidden">
-        <div className="w-96 flex flex-col gap-4">
+      <main className="flex-1 min-h-0 grid grid-cols-[24rem_1fr] gap-6 p-6 overflow-hidden">
+        <aside className="min-h-0 flex flex-col gap-4">
           <FilterBar 
             filterOptions={filterOptions} 
             onFilter={handleFilter}
           />
-          <div className="flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <ConversationList
               selectedId={selectedPhoneNumber}
               onSelect={setSelectedPhoneNumber}
             />
           </div>
-        </div>
+        </aside>
 
-        <div className="flex-1">
+        <section className="min-h-0 flex">
           {selectedPhoneNumber ? (
-            <ChatWindow phoneNumber={selectedPhoneNumber} />
+            <div className="flex-1 min-h-0"><ChatWindow phoneNumber={selectedPhoneNumber} /></div>
           ) : (
-            <div className="h-full flex items-center justify-center text-muted-foreground">
+            <div className="flex-1 min-h-0 flex items-center justify-center text-muted-foreground">
               Select a conversation to start chatting
             </div>
           )}
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
   );
 }

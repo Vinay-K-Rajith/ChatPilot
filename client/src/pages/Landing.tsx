@@ -122,6 +122,29 @@ export default function Landing() {
     }
   }, [input]);
 
+  // Auto-logout if the stored user object is empty/invalid
+  useEffect(() => {
+    const check = () => {
+      const authed = localStorage.getItem('auth') === 'true';
+      if (!authed) return;
+      let u: any = null;
+      try { u = JSON.parse(localStorage.getItem('user') || 'null'); } catch { u = null; }
+      const invalid = !u || (typeof u === 'object' && Object.keys(u).length === 0) || (!u.name && !u.phone);
+      if (invalid) {
+        localStorage.removeItem('auth');
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        const used = parseInt(localStorage.getItem('usedMessages') || '0');
+        setRemainingMessages(Math.max(0, 10 - used));
+        setShowUserPopup(false);
+        setShowLogin(true);
+      }
+    };
+    check();
+    window.addEventListener('storage', check);
+    return () => window.removeEventListener('storage', check);
+  }, []);
+
   const handleSend = async () => {
     if (!input.trim() || isTyping) return;
     
@@ -222,6 +245,34 @@ export default function Landing() {
     }
   };
 
+  // Ensure the lead exists in GMT_Leads after successful login
+  const ensureLeadExists = async (name: string, phone: string) => {
+    try {
+      const qs = new URLSearchParams({ limit: '1', search: phone });
+      const r = await fetch(`/api/leads?${qs.toString()}`);
+      if (r.ok) {
+        const data = await r.json();
+        const exists = Array.isArray(data?.leads) && data.leads.some((l: any) => (l?.phone || '').trim() === phone.trim());
+        if (!exists) {
+          await fetch('/api/leads', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phone, status: 'new', engagementScore: 0 })
+          }).catch(() => {});
+        }
+      } else {
+        // If check fails, attempt creation optimistically (handles unique index)
+        await fetch('/api/leads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, phone, status: 'new', engagementScore: 0 })
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.warn('ensureLeadExists failed', e);
+    }
+  };
+
   const handleLogin = async () => {
     if (!loginData.phone || !loginData.name || !loginData.otp) return;
 
@@ -237,11 +288,16 @@ export default function Landing() {
 
       if (response.ok) {
         await response.json().catch(() => ({}));
+        // Persist auth and profile locally
         localStorage.setItem('auth', 'true');
         localStorage.setItem('user', JSON.stringify({
           name: loginData.name,
           phone: loginData.phone
         }));
+
+        // Ensure the user exists in GMT_Leads on successful login
+        await ensureLeadExists(loginData.name, loginData.phone);
+
         localStorage.removeItem('usedMessages');
         setRemainingMessages(9999);
         setShowLogin(false);
@@ -279,39 +335,50 @@ export default function Landing() {
             </div>
           </div>
           <div className="flex items-center gap-2 relative">
-            {localStorage.getItem('auth') === 'true' ? (
-              <>
-                <button onClick={() => setShowUserPopup((v) => !v)} className="rounded-full focus:outline-none">
-                  <Avatar className="h-8 w-8">
-                    <AvatarFallback className="text-sm font-semibold">
-                      {JSON.parse(localStorage.getItem('user') || '{"name":"U"}').name?.charAt(0)?.toUpperCase() || 'U'}
-                    </AvatarFallback>
-                  </Avatar>
+            {(() => {
+              const authed = localStorage.getItem('auth') === 'true';
+              let u: any = null;
+              try { u = JSON.parse(localStorage.getItem('user') || 'null'); } catch {}
+              const hasProfile = authed && u && (u.name || u.phone);
+              if (hasProfile) {
+                return (
+                  <>
+                    <button onClick={() => setShowUserPopup((v) => !v)} className="rounded-full focus:outline-none">
+                      <Avatar className="h-8 w-8">
+                        <AvatarFallback className="text-sm font-semibold">
+                          {(u.name?.charAt(0) || 'U').toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                    </button>
+                    {showUserPopup && (
+                      <div className="absolute right-0 top-12 w-56 rounded-lg border shadow-lg p-3" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border }}>
+                        <div className="text-sm font-semibold mb-1" style={{ color: currentTheme.textPrimary }}>
+                          {u.name || 'User'}
+                        </div>
+                        {u.phone ? (
+                          <div className="text-xs" style={{ color: currentTheme.textSecondary }}>
+                            {u.phone}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </>
+                );
+              }
+              return (
+                <button 
+                  onClick={() => setShowLogin(true)}
+                  className="px-3 py-2 rounded-lg text-sm font-medium transition-all border hover-elevate"
+                  style={{ 
+                    color: currentTheme.textPrimary,
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)',
+                    borderColor: currentTheme.border
+                  }}
+                >
+                  Login
                 </button>
-                {showUserPopup && (
-                  <div className="absolute right-0 top-12 w-56 rounded-lg border shadow-lg p-3" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border }}>
-                    <div className="text-sm font-semibold mb-1" style={{ color: currentTheme.textPrimary }}>
-                      {JSON.parse(localStorage.getItem('user') || '{}').name || 'User'}
-                    </div>
-                    <div className="text-xs" style={{ color: currentTheme.textSecondary }}>
-                      {JSON.parse(localStorage.getItem('user') || '{}').phone || '-'}
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <button 
-                onClick={() => setShowLogin(true)}
-                className="px-3 py-2 rounded-lg text-sm font-medium transition-all border hover-elevate"
-                style={{ 
-                  color: currentTheme.textPrimary,
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)',
-                  borderColor: currentTheme.border
-                }}
-              >
-                Login
-              </button>
-            )}
+              );
+            })()}
             <button 
               onClick={() => setIsDark(!isDark)}
               className="p-2 rounded-lg transition-all duration-200"

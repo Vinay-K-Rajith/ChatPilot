@@ -428,6 +428,42 @@ export class MongoDBService {
   }
 
   // ============== Leads Methods ==============
+  /** Check if a lead exists by phone */
+  public async leadExists(phone: string): Promise<boolean> {
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    const found = await this.collections.leads.findOne({ phone } as any, { projection: { _id: 1 } } as any);
+    return !!found;
+  }
+
+  /** Get a lead by phone */
+  public async getLeadByPhone(phone: string): Promise<any | null> {
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    const lead = await this.collections.leads.findOne({ phone } as any);
+    return lead ? { ...(lead as any), _id: (lead as any)._id?.toString() } : null;
+  }
+
+  /** Create or update a lead by phone with provided fields */
+  public async upsertLeadByPhone(phone: string, updates: Record<string, any>): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    const now = new Date();
+    await this.collections.leads.updateOne(
+      { phone } as any,
+      {
+        $set: { phone, ...updates, updatedAt: now },
+        $setOnInsert: { createdAt: now, status: (updates as any).status || 'new', source: (updates as any).source || 'whatsapp' }
+      },
+      { upsert: true }
+    );
+  }
+
+  /** Convenience: set name for a lead by phone (upsert) */
+  public async upsertLeadNameByPhone(phone: string, name: string): Promise<void> {
+    await this.upsertLeadByPhone(phone, { name });
+  }
+
   public async getLeads(filters: LeadFilters = {}, pagination: PaginationOptions = {}): Promise<{
     leads: any[];
     total: number;
@@ -824,6 +860,39 @@ export class MongoDBService {
     if (!this.collections.whatsappTemplates) throw new Error('WhatsApp Templates collection is not initialized');
     const template = await this.collections.whatsappTemplates.findOne({ contentSid });
     return template ? { ...template, _id: template._id?.toString() } as any : null;
+  }
+
+  // ============== Chat Metadata Helpers (flags) ==============
+  /** Set specific fields inside chat metadata (non-destructive) */
+  public async setChatMetadataFields(phoneNumber: string, fields: Record<string, unknown>): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) throw new Error('ChatHistory collection is not initialized');
+    const setOps: any = {};
+    for (const [k, v] of Object.entries(fields)) {
+      setOps[`metadata.${k}`] = v;
+    }
+    await this.collections.chatHistory.updateOne(
+      { phoneNumber } as any,
+      { $set: setOps, $setOnInsert: { phoneNumber } },
+      { upsert: true }
+    );
+  }
+
+  /** Get chat metadata for a phone */
+  public async getChatMetadata(phoneNumber: string): Promise<Record<string, unknown> | null> {
+    await this.ensureConnected();
+    if (!this.collections.chatHistory) throw new Error('ChatHistory collection is not initialized');
+    const doc: any = await this.collections.chatHistory.findOne({ phoneNumber } as any, { projection: { metadata: 1 } } as any);
+    return doc?.metadata || null;
+  }
+
+  public async getAwaitingName(phoneNumber: string): Promise<boolean> {
+    const metadata = await this.getChatMetadata(phoneNumber);
+    return Boolean((metadata as any)?.awaitingName);
+  }
+
+  public async setAwaitingName(phoneNumber: string, awaiting: boolean): Promise<void> {
+    await this.setChatMetadataFields(phoneNumber, { awaitingName: awaiting });
   }
 }
 

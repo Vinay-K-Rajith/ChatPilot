@@ -103,13 +103,27 @@ export class TwilioService {
       try {
         console.log(`Received message from ${from}: ${message}`);
         const e164 = from.replace('whatsapp:', '');
-        
+
+        // Ensure a lead record exists for this phone (sets defaults on insert)
+        try { await this.mongodbService.upsertLeadByPhone(e164, {}); } catch {}
+
         // Store user message in chat history (store without whatsapp: prefix)
         await this.mongodbService.addMessageToChatHistory(e164, 'user', message, {
           phone: e164,
           channel: 'whatsapp',
           labels: ['whatsapp']
         });
+
+        // If we're awaiting the user's name, try to extract and save it unobtrusively
+        const awaitingName = await this.mongodbService.getAwaitingName(e164);
+        if (awaitingName) {
+          const extracted = this.extractNameFromText(message);
+          if (extracted) {
+            await this.mongodbService.upsertLeadNameByPhone(e164, extracted);
+            await this.mongodbService.setChatMetadataFields(e164, { customerName: extracted });
+            await this.mongodbService.setAwaitingName(e164, false);
+          }
+        }
 
         // Get chat history for context
         const chatHistory = await this.mongodbService.getChatHistory(e164);
@@ -134,6 +148,14 @@ export class TwilioService {
 
         // Send AI response back to customer (ensure proper whatsapp: addressing)
         await this.sendMessage(e164, aiResponse);
+
+        // After replying, if this number isn't in leads and we're not already awaiting name, ask for an intro
+        const exists = await this.mongodbService.leadExists(e164);
+        if (!exists && !awaitingName) {
+          await this.mongodbService.setAwaitingName(e164, true);
+          const intro = "Before we continue, I don't believe we've been properly introduced—I'm Genie. And you are?";
+          await this.sendMessage(e164, intro);
+        }
       } catch (error) {
         console.error('Error handling incoming message:', error);
         // Best-effort error notification
@@ -216,5 +238,56 @@ How can I help you today?`;
       console.error('Error fetching account info:', error);
       throw error;
     }
+  }
+
+  // Simple name extraction that won't disrupt conversation
+  private extractNameFromText(text: string): string | null {
+    try {
+      const raw = (text || '').trim();
+      if (!raw) return null;
+
+      // Common patterns: "I'm X", "I am X", "This is X", "My name is X"
+      const patterns = [
+        /(my name is|i am|i'm|this is|it is|it's)\s+([A-Za-z][A-Za-z'\- ]{1,40})/i
+      ];
+      for (const re of patterns) {
+        const m = raw.match(re);
+        if (m) {
+          const candidate = m[2];
+          const cleaned = this.cleanName(candidate);
+          if (cleaned) return cleaned;
+        }
+      }
+
+      // If the message is short and looks like a name (<= 3 words, mostly letters)
+      const words = raw.split(/\s+/).filter(Boolean);
+      const greetings = ['hi', 'hello', 'hey', 'good', 'morning', 'evening', 'afternoon'];
+      const onlyLetters = /^[A-Za-z][A-Za-z'\- ]{0,40}$/;
+      if (words.length > 0 && words.length <= 3 && onlyLetters.test(raw.toLowerCase().replace(/\b(?:from|at|of)\b.*$/i, '').trim())) {
+        const lower = raw.toLowerCase();
+        if (!greetings.some(g => lower.includes(g))) {
+          const cleaned = this.cleanName(raw);
+          if (cleaned) return cleaned;
+        }
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private cleanName(candidate: string): string | null {
+    const stopTokens = /( from | at | of | the |\,|\.|\||\-|\+|\(|\)|\d)/i;
+    let name = candidate.split('\n')[0];
+    const idx = name.search(stopTokens);
+    if (idx > 0) name = name.slice(0, idx);
+    name = name.replace(/[^A-Za-z'\- ]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!name) return null;
+    // Title Case
+    name = name.split(' ').slice(0, 2).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    // Basic sanity
+    if (name.length < 2) return null;
+    return name;
   }
 }

@@ -77,7 +77,48 @@ export class TwilioContentService {
 
   public async getStatus(contentSid: string): Promise<{ success: boolean; status?: string; raw?: any; error?: string }>
   {
+    // Strategy:
+    // 1) Query ApprovalRequests subresource for WhatsApp (most reliable)
+    // 2) Fallback to Content resource fields
+    // 3) Normalize status to approved/pending/rejected/disabled where possible
+    const normalize = (s?: string): string | undefined => {
+      if (!s) return undefined;
+      const v = s.toString().toLowerCase();
+      if (/(approved|approve|live|active)/.test(v)) return 'approved';
+      if (/(pending|in_review|submitted|review)/.test(v)) return 'pending';
+      if (/(rejected|reject|failed|denied)/.test(v)) return 'rejected';
+      if (/(paused|disabled|inactive)/.test(v)) return 'disabled';
+      return s;
+    };
+
     try {
+      // 1) ApprovalRequests subresource
+      const apprUrl = `https://content.twilio.com/v1/Content/${encodeURIComponent(contentSid)}/ApprovalRequests/whatsapp`;
+      const apprResp = await fetch(apprUrl, { headers: this.headersJson } as any);
+      const apprText = await apprResp.text();
+      let apprJson: any; try { apprJson = JSON.parse(apprText); } catch { apprJson = undefined; }
+      if (apprResp.ok) {
+        // Twilio may return single object or list; try common fields
+        let status = normalize(apprJson?.status || apprJson?.review_status || apprJson?.whatsapp_status);
+        // Handle list formats
+        const listCandidates: any[] = [];
+        if (Array.isArray(apprJson)) listCandidates.push(...apprJson);
+        if (Array.isArray(apprJson?.data)) listCandidates.push(...apprJson.data);
+        if (Array.isArray(apprJson?.approval_requests)) listCandidates.push(...apprJson.approval_requests);
+        if (listCandidates.length) {
+          const mapped = listCandidates.map((it: any) => ({
+            status: normalize(it?.status || it?.review_status || it?.whatsapp_status),
+            updated: new Date(it?.date_updated || it?.dateCreated || it?.date_created || 0).getTime(),
+          }));
+          mapped.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+          status = mapped.find(m => m.status)?.status || status;
+        }
+        if (status) return { success: true, status, raw: apprJson };
+      }
+    } catch (_) { /* ignore and fallback */ }
+
+    try {
+      // 2) Fallback to Content resource
       const url = `https://content.twilio.com/v1/Content/${encodeURIComponent(contentSid)}`;
       const resp = await fetch(url, { headers: this.headersJson } as any);
       const text = await resp.text();
@@ -86,11 +127,28 @@ export class TwilioContentService {
         const msg = json?.message || text || `HTTP ${resp.status}`;
         return { success: false, error: msg, raw: json || text };
       }
-      // content has approvals list in sub-resource; basic status from latest approval if available
-      const approvalStatus = (json?.whatsapp_approval_status || json?.status) as string | undefined;
-      return { success: true, status: approvalStatus || 'unknown', raw: json };
+      const status = normalize(json?.whatsapp_approval_status || json?.status);
+      return { success: true, status: status || 'unknown', raw: json };
     } catch (e: any) {
       return { success: false, error: e?.message || 'Network error fetching status' };
+    }
+  }
+
+  /** Fetches the Content object from Twilio Content API */
+  public async getContent(contentSid: string): Promise<{ success: boolean; content?: any; error?: string }>
+  {
+    try {
+      const url = `https://content.twilio.com/v1/Content/${encodeURIComponent(contentSid)}`;
+      const resp = await fetch(url, { headers: this.headersJson } as any);
+      const text = await resp.text();
+      let json: any; try { json = JSON.parse(text); } catch { json = undefined; }
+      if (!resp.ok) {
+        const msg = json?.message || text || `HTTP ${resp.status}`;
+        return { success: false, error: msg };
+      }
+      return { success: true, content: json };
+    } catch (e: any) {
+      return { success: false, error: e?.message || 'Network error fetching content' };
     }
   }
 }

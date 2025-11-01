@@ -18,9 +18,56 @@ interface ChatWindowProps {
   phoneNumber: string;
 }
 
+function RichText({ content }: { content: string }) {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+
+  const renderInline = (text: string) => {
+    // Handle **bold** first
+    const boldParts = text.split(/(\*\*[^*]+?\*\*)/g);
+    return boldParts.flatMap((part, i) => {
+      if (/^\*\*[^*]+?\*\*$/.test(part)) {
+        const inner = part.slice(2, -2);
+        return [<strong key={`b-${i}`}>{inner}</strong>];
+      }
+      // Linkify URLs in the remaining text
+      const pieces = part.split(urlRegex);
+      return pieces.map((p, j) => {
+        if (urlRegex.test(p)) {
+          return (
+            <a key={`a-${i}-${j}`} href={p} target="_blank" rel="noreferrer" className="underline break-all">
+              {p}
+            </a>
+          );
+        }
+        return <span key={`t-${i}-${j}`}>{p}</span>;
+      });
+    });
+  };
+
+  // Split paragraphs by double newline, lines by single newline
+  const paragraphs = content.split(/\n{2,}/);
+  return (
+    <>
+      {paragraphs.map((para, pi) => {
+        const lines = para.split(/\n/);
+        return (
+          <p key={`p-${pi}`} className="mb-2 last:mb-0">
+            {lines.map((line, li) => (
+              <span key={`l-${pi}-${li}`}>
+                {renderInline(line)}
+                {li < lines.length - 1 ? <br /> : null}
+              </span>
+            ))}
+          </p>
+        );
+      })}
+    </>
+  );
+}
+
 export default function ChatWindow({ phoneNumber }: ChatWindowProps) {
   const [newMessage, setNewMessage] = useState("");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
   // Query for chat history
@@ -38,15 +85,15 @@ export default function ChatWindow({ phoneNumber }: ChatWindowProps) {
   const sendMessage = useMutation({
     mutationKey: ['sendMessage', phoneNumber],
     mutationFn: async (content: string) => {
-      const response = await fetch(`/api/webhook/twilio`, {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(phoneNumber)}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          From: phoneNumber,
-          Body: content
-        })
+        body: JSON.stringify({ message: content })
       });
-      if (!response.ok) throw new Error('Failed to send message');
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.error || 'Failed to send message');
+      }
       return response.json();
     },
     onSuccess: () => {
@@ -62,20 +109,22 @@ export default function ChatWindow({ phoneNumber }: ChatWindowProps) {
   };
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
   }, [chatHistory?.messages]);
 
   if (isLoading) {
     return (
-      <Card className="flex flex-col h-[600px] items-center justify-center">
+      <Card className="flex flex-col h-full items-center justify-center">
         <p>Loading chat history...</p>
       </Card>
     );
   }
 
   return (
-    <Card className="flex flex-col h-[600px]">
-      <div className="flex items-center gap-3 p-4 border-b">
+    <Card className="flex flex-col h-full">
+      <div className="flex items-center gap-3 p-4 border-b sticky top-0 bg-background z-10">
         <Avatar className="h-10 w-10">
           <AvatarFallback className="bg-primary/10">
             <User className="h-4 w-4" />
@@ -89,7 +138,7 @@ export default function ChatWindow({ phoneNumber }: ChatWindowProps) {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
         {chatHistory?.messages.map((message: Message, index: number) => (
           <div
             key={index}
@@ -107,20 +156,21 @@ export default function ChatWindow({ phoneNumber }: ChatWindowProps) {
             )}
             <div
               className={cn(
-                "rounded-lg px-3 py-2 max-w-[80%]",
+                "rounded-lg px-3 py-2 max-w-[80%] break-words",
                 message.role === "user"
                   ? "bg-primary text-primary-foreground"
                   : "bg-muted"
               )}
             >
-              <p className="text-sm">{message.content}</p>
+              <div className="text-sm whitespace-pre-wrap">
+                <RichText content={message.content} />
+              </div>
               <p className="text-xs opacity-50 mt-1">
                 {format(new Date(message.timestamp), "p")}
               </p>
             </div>
           </div>
         ))}
-        <div ref={messagesEndRef} />
       </div>
 
       <div className="p-4 border-t flex gap-2">
