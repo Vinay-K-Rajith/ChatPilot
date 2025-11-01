@@ -121,10 +121,10 @@ export default function LeadTable({
                   <div className="flex items-center gap-3">
                     <Avatar className="h-8 w-8">
                       <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
-                        {lead.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+                        {(lead.name || lead.phone || 'U').split(' ').map(n => (n?.[0] || '')).join('').toUpperCase().slice(0, 2) || 'U'}
                       </AvatarFallback>
                     </Avatar>
-                    <span className="font-medium text-sm">{lead.name}</span>
+                    <span className="font-medium text-sm">{lead.name || lead.phone || 'Unnamed'}</span>
                   </div>
                 </td>
                 <td className="px-4 py-3">
