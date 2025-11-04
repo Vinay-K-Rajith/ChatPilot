@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useLocation } from "wouter";
 import FilterBar from "@/components/FilterBar";
 import LeadTable from "@/components/LeadTable";
 import PreviewChat from "@/components/PreviewChat";
@@ -7,7 +8,7 @@ import ExcelImport from "@/components/ExcelImport";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, MessageSquare, Upload, Trash, Loader2 } from "lucide-react";
+import { Plus, MessageSquare, Upload, Trash, Loader2, BarChart3 } from "lucide-react";
 import { useLeads, useLeadOperations } from "@/hooks/useLeads";
 import type { LeadWithId, CreateLead, LeadFilters, PaginationOptions } from "../../../shared/models/lead";
 
@@ -24,8 +25,10 @@ export default function Leads() {
     sortBy: 'createdAt',
     sortOrder: 'desc'
   });
+  const [calculatingEngagement, setCalculatingEngagement] = useState(false);
   
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   
   // Fetch leads data
   const { data: leadsResponse, isLoading, error } = useLeads(filters, pagination);
@@ -123,6 +126,49 @@ export default function Leads() {
     setSelectedLeads(selected ? leads.map(lead => lead._id || '') : []);
   };
 
+  const handleContactLead = (leadId: string) => {
+    // Find the lead by ID to get the phone number
+    const lead = leads.find(l => l._id === leadId);
+    if (lead && lead.phone) {
+      // Navigate to Conversations page with the phone number as a query parameter
+      navigate(`/conversations?phone=${encodeURIComponent(lead.phone)}`);
+    } else {
+      toast({ title: "Error", description: "Lead phone number not found", variant: "destructive" });
+    }
+  };
+
+  const handleCalculateEngagement = async () => {
+    if (calculatingEngagement) return;
+    
+    setCalculatingEngagement(true);
+    try {
+      const response = await fetch('/api/leads/calculate-all-engagement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        toast({ 
+          title: "Success", 
+          description: `Calculated engagement for ${result.results.updated} leads. Skipped: ${result.results.skipped}, Errors: ${result.results.errors}` 
+        });
+        // Refresh leads after calculation
+        window.location.reload();
+      } else {
+        throw new Error('Failed to calculate engagement scores');
+      }
+    } catch (error) {
+      toast({ 
+        title: "Error", 
+        description: error instanceof Error ? error.message : "Failed to calculate engagement scores", 
+        variant: "destructive" 
+      });
+    } finally {
+      setCalculatingEngagement(false);
+    }
+  };
+
   return (
     <div className="p-6 space-y-6">
       <div className="relative overflow-hidden rounded-lg">
@@ -165,6 +211,20 @@ export default function Leads() {
               Preview Chat
             </Button>
             <Button 
+              variant="outline" 
+              className="bg-white/10 border-white/20 text-white hover:bg-white/20"
+              onClick={handleCalculateEngagement}
+              disabled={calculatingEngagement}
+              data-testid="button-calculate-engagement"
+            >
+              {calculatingEngagement ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <BarChart3 className="h-4 w-4 mr-2" />
+              )}
+              Calculate Scores
+            </Button>
+            <Button 
               variant="outline"
               className="bg-white/10 border-white/20 text-white hover:bg-white/20"
               onClick={() => setIsImportOpen(true)}
@@ -203,7 +263,7 @@ export default function Leads() {
         selectedLeads={selectedLeads}
         onSelectLead={handleSelectLead}
         onSelectAll={handleSelectAll}
-        onContactLead={(id) => console.log("Contact lead:", id)}
+        onContactLead={handleContactLead}
         onEditLead={setEditingLead}
         onDeleteLead={handleDeleteLead}
         isLoading={isLoading}

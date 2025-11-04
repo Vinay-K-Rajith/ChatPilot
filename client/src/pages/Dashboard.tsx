@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import StatCard from "@/components/StatCard";
 import AnalyticsChart from "@/components/AnalyticsChart";
 import ConversationList from "@/components/ConversationList";
-import TemplateStatus from "@/components/TemplateStatus";
 import ApprovedTemplates from "@/components/ApprovedTemplates";
 import { Users, MessageSquare, TrendingUp, Target } from "lucide-react";
 import { safeFetch } from "@/utils/api";
@@ -198,11 +197,6 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      </div>
-
-      <div>
-        <h2 className="text-lg font-semibold mb-4">WhatsApp Template Status</h2>
-        <TemplateStatus limit={5} />
       </div>
 
       <div className="mt-6">

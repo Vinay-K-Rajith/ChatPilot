@@ -46,9 +46,15 @@ export default function LeadTable({
   };
 
   const getEngagementColor = (score: number) => {
-    if (score >= 80) return "text-chart-3";
-    if (score >= 50) return "text-chart-4";
-    return "text-muted-foreground";
+    if (score >= 75) return "text-green-600";
+    if (score < 30) return "text-red-600";
+    return "text-yellow-500";
+  };
+
+  const getEngagementBarColor = (score: number) => {
+    if (score >= 75) return "bg-green-500";
+    if (score < 30) return "bg-red-500";
+    return "bg-yellow-500";
   };
 
   const allSelected = leads.length > 0 && selectedLeads.length === leads.length;
@@ -150,7 +156,7 @@ export default function LeadTable({
                   <div className="flex items-center gap-2">
                     <div className="w-24 bg-muted rounded-full h-2">
                       <div
-                        className={`h-2 rounded-full ${lead.engagementScore >= 80 ? 'bg-chart-3' : lead.engagementScore >= 50 ? 'bg-chart-4' : 'bg-muted-foreground'}`}
+                        className={`h-2 rounded-full ${getEngagementBarColor(lead.engagementScore)}`}
                         style={{ width: `${lead.engagementScore}%` }}
                       />
                     </div>

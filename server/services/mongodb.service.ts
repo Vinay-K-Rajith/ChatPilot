@@ -12,6 +12,7 @@ import type {
   DatabaseLegacyArticle
 } from '../../shared/knowledge';
 import { databaseToLegacyArticle } from '../../shared/knowledge';
+import { normalizePhoneE164 } from '../../shared/utils/phone';
 import type {
   ServerCampaign,
   Campaign,
@@ -26,7 +27,7 @@ dotenv.config();
 
 // Types for MongoDB service
 export interface WhatsAppTemplate {
-  _id?: ObjectId;
+  _id?: ObjectId | string;
   contentSid: string;
   approvalSid?: string;
   name: string;
@@ -36,6 +37,7 @@ export interface WhatsAppTemplate {
   body: string;
   mediaUrl?: string;
   variables?: Record<string, string>;
+  status?: string;
   createdAt: Date;
 }
 
@@ -252,8 +254,8 @@ export class MongoDBService {
     if (!this.collections.gmt_otp) {
       throw new Error('GMT_OTP collection is not initialized');
     }
-    await this.collections.gmt_otp.insertOne({
-      phone,
+await this.collections.gmt_otp.insertOne({
+      phone: normalizePhoneE164(phone),
       otp,
       name,
       createdAt: new Date(),
@@ -266,8 +268,8 @@ export class MongoDBService {
     if (!this.collections.gmt_otp) {
       throw new Error('GMT_OTP collection is not initialized');
     }
-    const record = await this.collections.gmt_otp.findOne({
-      phone,
+const record = await this.collections.gmt_otp.findOne({
+      phone: normalizePhoneE164(phone),
       otp,
       expiresAt: { $gt: new Date() }
     });
@@ -286,11 +288,12 @@ export class MongoDBService {
       throw new Error('GMT_Cust collection is not initialized');
     }
     const now = new Date();
-    await this.collections.gmt_cust.updateOne(
-      { phone: customer.phone },
+await this.collections.gmt_cust.updateOne(
+      { phone: normalizePhoneE164(customer.phone) },
       { 
-        $set: { 
+$set: { 
           ...customer,
+          phone: normalizePhoneE164(customer.phone),
           lastLogin: now
         },
         $setOnInsert: {
@@ -306,7 +309,7 @@ export class MongoDBService {
     if (!this.collections.gmt_cust) {
       throw new Error('GMT_Cust collection is not initialized');
     }
-    return this.collections.gmt_cust.findOne({ phone });
+return this.collections.gmt_cust.findOne({ phone: normalizePhoneE164(phone) });
   }
   
   // Legacy Knowledge Base Methods
@@ -432,7 +435,7 @@ export class MongoDBService {
   public async leadExists(phone: string): Promise<boolean> {
     await this.ensureConnected();
     if (!this.collections.leads) throw new Error('Leads collection is not initialized');
-    const found = await this.collections.leads.findOne({ phone } as any, { projection: { _id: 1 } } as any);
+const found = await this.collections.leads.findOne({ phone: normalizePhoneE164(phone) } as any, { projection: { _id: 1 } } as any);
     return !!found;
   }
 
@@ -440,7 +443,7 @@ export class MongoDBService {
   public async getLeadByPhone(phone: string): Promise<any | null> {
     await this.ensureConnected();
     if (!this.collections.leads) throw new Error('Leads collection is not initialized');
-    const lead = await this.collections.leads.findOne({ phone } as any);
+const lead = await this.collections.leads.findOne({ phone: normalizePhoneE164(phone) } as any);
     return lead ? { ...(lead as any), _id: (lead as any)._id?.toString() } : null;
   }
 
@@ -449,11 +452,22 @@ export class MongoDBService {
     await this.ensureConnected();
     if (!this.collections.leads) throw new Error('Leads collection is not initialized');
     const now = new Date();
-    await this.collections.leads.updateOne(
-      { phone } as any,
+    
+    // Validate name field: don't allow phone numbers or empty names
+    if (updates.name !== undefined) {
+      const nameStr = String(updates.name).trim();
+      // Reject if name contains digits (phone numbers) or is empty
+      if (!nameStr || /\d/.test(nameStr)) {
+        console.warn(`Invalid name rejected: "${updates.name}" for phone ${phone}`);
+        delete updates.name; // Remove invalid name from updates
+      }
+    }
+    
+await this.collections.leads.updateOne(
+      { phone: normalizePhoneE164(phone) } as any,
       {
-        $set: { phone, ...updates, updatedAt: now },
-        $setOnInsert: { createdAt: now, status: (updates as any).status || 'new', source: (updates as any).source || 'whatsapp' }
+        $set: { phone: normalizePhoneE164(phone), ...updates, ...((updates as any).status ? {} : { status: 'new' }), updatedAt: now },
+        $setOnInsert: { createdAt: now, source: (updates as any).source || 'whatsapp' }
       },
       { upsert: true }
     );
@@ -462,6 +476,16 @@ export class MongoDBService {
   /** Convenience: set name for a lead by phone (upsert) */
   public async upsertLeadNameByPhone(phone: string, name: string): Promise<void> {
     await this.upsertLeadByPhone(phone, { name });
+  }
+
+  /** Update lead's engagement score */
+  public async updateLeadEngagementScore(phone: string, engagementScore: number): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    await this.collections.leads.updateOne(
+      { phone: normalizePhoneE164(phone) } as any,
+      { $set: { engagementScore, updatedAt: new Date() } }
+    );
   }
 
   public async getLeads(filters: LeadFilters = {}, pagination: PaginationOptions = {}): Promise<{
@@ -541,8 +565,9 @@ export class MongoDBService {
   public async createLead(leadData: Omit<Lead, '_id' | 'createdAt' | 'updatedAt'>): Promise<any> {
     await this.ensureConnected();
     if (!this.collections.leads) throw new Error('Leads collection is not initialized');
-    const now = new Date();
-    const lead = { ...(leadData as any), createdAt: now, updatedAt: now } as ServerLead;
+const now = new Date();
+    const phone = normalizePhoneE164((leadData as any).phone);
+    const lead = { ...(leadData as any), phone, createdAt: now, updatedAt: now } as ServerLead;
     const result = await this.collections.leads.insertOne(lead);
     return { ...(lead as any), _id: result.insertedId.toString() } as any;
   }
@@ -860,6 +885,19 @@ export class MongoDBService {
     if (!this.collections.whatsappTemplates) throw new Error('WhatsApp Templates collection is not initialized');
     const template = await this.collections.whatsappTemplates.findOne({ contentSid });
     return template ? { ...template, _id: template._id?.toString() } as any : null;
+  }
+
+  public async updateWhatsAppTemplate(id: string, updates: Partial<WhatsAppTemplate>): Promise<WhatsAppTemplate | null> {
+    await this.ensureConnected();
+    if (!this.collections.whatsappTemplates) throw new Error('WhatsApp Templates collection is not initialized');
+    
+    const result: any = await this.collections.whatsappTemplates.findOneAndUpdate(
+      { _id: new ObjectId(id) } as any,
+      { $set: updates },
+      { returnDocument: 'after' as any }
+    );
+    
+    return result?.value ? { ...result.value, _id: result.value._id?.toString() } as any : null;
   }
 
   // ============== Chat Metadata Helpers (flags) ==============

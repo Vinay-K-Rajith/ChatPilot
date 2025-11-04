@@ -184,6 +184,60 @@ Be professional, helpful, emotionally intelligent, and ALWAYS stay focused on ${
     }
   }
 
+  /**
+   * Calculate engagement score (1-100) based on conversation history
+   * Evaluates customer's potential for lead conversion
+   * @param conversationHistory Array of messages in the conversation
+   * @returns Engagement score (1-100), defaults to 50 if calculation fails
+   */
+  public async calculateEngagementScore(
+    conversationHistory: Array<{ role: string; content: string }>
+  ): Promise<number> {
+    try {
+      if (!conversationHistory || conversationHistory.length === 0) return 0;
+
+      const prompt = `Analyze this customer conversation and rate their engagement/conversion potential on a scale of 1-100.
+
+Conversation:
+${conversationHistory.map(m => `${m.role === 'user' ? 'Customer' : 'Assistant'}: ${m.content}`).join('\n\n')}
+
+Criteria for scoring:
+- 1-20: No interest, off-topic, or negative sentiment
+- 21-40: Casual inquiries, minimal engagement
+- 41-60: Moderate interest, asking questions about products
+- 61-80: Strong interest, discussing specific products/pricing, asking detailed questions
+- 81-100: High intent, ready to convert, discussing orders/negotiations
+
+Respond with ONLY a single number between 1-100. No explanation.`;
+
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert at analyzing customer engagement and conversion potential. Respond with only a number between 1-100.'
+          },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 10,
+        temperature: 0.3
+      });
+
+      const scoreText = response.choices[0]?.message.content?.trim() || '50';
+      const score = parseInt(scoreText, 10);
+
+      // Validate score is between 1-100, otherwise return 50
+      if (isNaN(score) || score < 1 || score > 100) {
+        return 50;
+      }
+
+      return score;
+    } catch (error) {
+      console.error('Error calculating engagement score:', error);
+      return 50; // Default placeholder on error
+    }
+  }
+
   // Simple helper for routes expecting this name
   public async generateFromKnowledgeBase(message: string): Promise<string> {
     return this.generateResponse(message, []);

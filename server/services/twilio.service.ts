@@ -31,8 +31,8 @@ export class TwilioService {
       if (p.startsWith('+')) return p;
       const digits = p.replace(/\D/g, '');
       if (!digits) return p;
-      const cc = (process.env.DEFAULT_COUNTRY_CODE || '').replace(/\D/g, '');
-      return cc ? `+${cc}${digits}` : `+${digits}`;
+const cc = (process.env.DEFAULT_COUNTRY_CODE || '1').replace(/\D/g, '');
+      return `+${cc}${digits}`;
     } catch {
       return raw;
     }
@@ -114,14 +114,21 @@ export class TwilioService {
           labels: ['whatsapp']
         });
 
-        // If we're awaiting the user's name, try to extract and save it unobtrusively
+        // Determine if we should capture or request the user's name
         const awaitingName = await this.mongodbService.getAwaitingName(e164);
-        if (awaitingName) {
-          const extracted = this.extractNameFromText(message);
-          if (extracted) {
+        const lead = await this.mongodbService.getLeadByPhone(e164);
+        const hasName = Boolean((lead as any)?.name);
+
+        // Try to extract a name on every inbound if we don't already have one or we're awaiting it
+        const extracted = this.extractNameFromText(message);
+        if (extracted && (!hasName || awaitingName)) {
+          // Extra validation: ensure extracted name is not a phone number
+          const isValidName = extracted && !/\d/.test(extracted) && extracted.length >= 2;
+          if (isValidName) {
             await this.mongodbService.upsertLeadNameByPhone(e164, extracted);
             await this.mongodbService.setChatMetadataFields(e164, { customerName: extracted });
             await this.mongodbService.setAwaitingName(e164, false);
+            console.log(`✓ Name captured for ${e164}: ${extracted}`);
           }
         }
 
@@ -149,9 +156,10 @@ export class TwilioService {
         // Send AI response back to customer (ensure proper whatsapp: addressing)
         await this.sendMessage(e164, aiResponse);
 
-        // After replying, if this number isn't in leads and we're not already awaiting name, ask for an intro
-        const exists = await this.mongodbService.leadExists(e164);
-        if (!exists && !awaitingName) {
+        // After replying, if we still don't have a name and we're not already awaiting it, ask for an intro
+        const needName = !(await this.mongodbService.getLeadByPhone(e164))?.name;
+        const stillAwaiting = await this.mongodbService.getAwaitingName(e164);
+        if (needName && !stillAwaiting) {
           await this.mongodbService.setAwaitingName(e164, true);
           const intro = "Before we continue, I don't believe we've been properly introduced—I'm Genie. And you are?";
           await this.sendMessage(e164, intro);
@@ -246,14 +254,19 @@ How can I help you today?`;
       const raw = (text || '').trim();
       if (!raw) return null;
 
+      // Reject any text that contains digits (phone numbers, etc.)
+      if (/\d/.test(raw)) return null;
+
       // Common patterns: "I'm X", "I am X", "This is X", "My name is X"
       const patterns = [
-        /(my name is|i am|i'm|this is|it is|it's)\s+([A-Za-z][A-Za-z'\- ]{1,40})/i
+        /(my\s+name\s*'?s?\s+is|i am|i'm|this is|it is|it's)\s+([A-Za-z][A-Za-z'\- ]{1,40})/i
       ];
       for (const re of patterns) {
         const m = raw.match(re);
         if (m) {
           const candidate = m[2];
+          // Double check no digits in extracted name
+          if (/\d/.test(candidate)) continue;
           const cleaned = this.cleanName(candidate);
           if (cleaned) return cleaned;
         }
@@ -278,16 +291,29 @@ How can I help you today?`;
   }
 
   private cleanName(candidate: string): string | null {
-    const stopTokens = /( from | at | of | the |\,|\.|\||\-|\+|\(|\)|\d)/i;
+    // First check: reject if contains any digits
+    if (/\d/.test(candidate)) return null;
+    
+    const stopTokens = /( from | at | of | the |\,|\.|\||\-|\+|\(|\))/i;
     let name = candidate.split('\n')[0];
     const idx = name.search(stopTokens);
     if (idx > 0) name = name.slice(0, idx);
     name = name.replace(/[^A-Za-z'\- ]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!name) return null;
+    
+    // Reject if still contains digits after cleaning
+    if (/\d/.test(name)) return null;
+    
     // Title Case
     name = name.split(' ').slice(0, 2).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-    // Basic sanity
+    
+    // Basic sanity checks
     if (name.length < 2) return null;
+    
+    // Reject common non-name words
+    const invalidNames = ['yes', 'no', 'ok', 'okay', 'sure', 'thanks', 'thank', 'please', 'hi', 'hello', 'hey'];
+    if (invalidNames.includes(name.toLowerCase())) return null;
+    
     return name;
   }
 }

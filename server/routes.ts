@@ -8,6 +8,7 @@ import { TwilioService } from "./services/twilio.service";
 import { MongoDBService } from "./services/mongodb.service";
 import { OpenAIService } from "./services/openai.service";
 import { TwilioContentService } from "./services/twilioContent.service";
+import { normalizePhoneE164 } from "../shared/utils/phone";
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize services
   const mongodbService = MongoDBService.getInstance();
@@ -61,7 +62,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Public chat endpoint (for landing page)
+// Public chat endpoint (for landing page)
   app.post('/api/chat', async (req, res) => {
     try {
       const { message, user } = req.body as { message?: string; user?: { name?: string; phone?: string } };
@@ -69,15 +70,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: 'Message is required' });
       }
 
-      // Determine identity: use phone if provided, otherwise IP
+      // Determine identity: use phone if provided (normalized), otherwise IP
       const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || 'unknown';
-      const identifier = user?.phone && user?.phone.trim().length > 0 ? user.phone : ip;
+      const phoneNorm = user?.phone && user?.phone.trim().length > 0 ? normalizePhoneE164(user.phone) : undefined;
+      const identifier = phoneNorm || ip;
 
       // Store user message
       await mongodbService.addMessageToChatHistory(identifier, 'user', message, {
         customerName: user?.name,
-        phone: user?.phone,
-        ip: user?.phone ? undefined : ip,
+        phone: phoneNorm,
+        ip: phoneNorm ? undefined : ip,
       });
 
       // Pull recent chat history for context (last 20 messages)
@@ -104,7 +106,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Request OTP endpoint
+// Request OTP endpoint
   app.post('/api/request-otp', async (req, res) => {
     try {
       const { phone, name } = req.body;
@@ -112,14 +114,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: 'Phone and name are required' });
       }
 
+      const e164 = normalizePhoneE164(phone, process.env.DEFAULT_COUNTRY_CODE);
+
       // Generate a random 6-digit OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       
       // Store the OTP and user info temporarily (you might want to use Redis in production)
-      await mongodbService.storeOTP(phone, otp, name);
+      await mongodbService.storeOTP(e164, otp, name);
       
       // Send OTP via SMS using Twilio
-      const sent = await twilioService.sendSms(phone, `Your ChatPilot verification code is: ${otp}`);
+      const sent = await twilioService.sendSms(e164, `Your ChatPilot verification code is: ${otp}`);
       if (!sent) {
         return res.status(502).json({ error: 'Failed to send OTP via SMS' });
       }
@@ -131,7 +135,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Verify OTP endpoint
+// Verify OTP endpoint
   app.post('/api/verify-otp', async (req, res) => {
     try {
       const { phone, name, otp } = req.body;
@@ -139,15 +143,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: 'Phone, name and OTP are required' });
       }
 
+      const e164 = normalizePhoneE164(phone, process.env.DEFAULT_COUNTRY_CODE);
+
       // Verify OTP
-      const isValid = await mongodbService.verifyOTP(phone, otp);
+      const isValid = await mongodbService.verifyOTP(e164, otp);
       if (!isValid) {
         return res.status(400).json({ error: 'Invalid OTP' });
       }
 
       // Store user in GMT_Cust collection
       await mongodbService.createOrUpdateCustomer({
-        phone,
+        phone: e164,
         name,
         lastLogin: new Date(),
       });
@@ -330,16 +336,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get Content/Approval status
+  // Get Content/Approval status (low-latency endpoint)
   app.get('/api/whatsapp/templates/:sid/status', async (req: Request<{sid: string}>, res: Response) => {
     try {
       const svc = TwilioContentService.getInstance();
-      const status = await svc.getStatus(req.params.sid);
+      const { sid } = req.params;
+      
+      // Fetch live status from Twilio
+      const status = await svc.getStatus(sid);
       if (!status.success) return res.status(502).json(status);
-      res.json(status);
+      
+      // Update DB with latest status (async, non-blocking)
+      setImmediate(async () => {
+        try {
+          const dbTemplate = await mongodbService.getWhatsAppTemplateByContentSid(sid);
+          if (dbTemplate && dbTemplate._id) {
+            const templateId = typeof dbTemplate._id === 'string' ? dbTemplate._id : (dbTemplate._id as unknown as string);
+            await mongodbService.updateWhatsAppTemplate(templateId, { status: status.status || 'unknown' });
+          }
+        } catch (err) {
+          console.error('Failed to update template status in DB:', err);
+        }
+      });
+      
+      res.json({ success: true, status: status.status, raw: status.raw });
     } catch (error) {
       console.error('Get template status error:', error);
       res.status(500).json({ success: false, error: 'Failed to get status' });
+    }
+  });
+
+  // Sync all template statuses with Twilio (on-demand)
+  app.post('/api/whatsapp/templates/sync-status', async (req: Request, res: Response) => {
+    try {
+      const svc = TwilioContentService.getInstance();
+      const templates = await mongodbService.getWhatsAppTemplates();
+      
+      const results = await Promise.allSettled(
+        templates.map(async (t) => {
+          const statusRes = await svc.getStatus(t.contentSid);
+          if (statusRes.success && t._id) {
+            const templateId = typeof t._id === 'string' ? t._id : (t._id as unknown as string);
+            await mongodbService.updateWhatsAppTemplate(templateId, { status: statusRes.status || 'unknown' });
+          }
+          return { contentSid: t.contentSid, status: statusRes.status || 'unknown' };
+        })
+      );
+      
+      const successful = results.filter(r => r.status === 'fulfilled').length;
+      res.json({ success: true, synced: successful, total: templates.length });
+    } catch (error) {
+      console.error('Sync template status error:', error);
+      res.status(500).json({ success: false, error: 'Failed to sync statuses' });
     }
   });
 
@@ -376,19 +424,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const limit = req.query.limit ? parseInt(req.query.limit) : undefined;
       const templates = await mongodbService.getWhatsAppTemplates(limit);
       
-      // Fetch live status from Twilio for each template
+      // Check if Twilio credentials are configured
       const svc = TwilioContentService.getInstance();
+      const hasCredentials = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN);
+      
+      // Fetch live status from Twilio for each template (with fallback)
       const templatesWithStatus = await Promise.all(
         templates.map(async (template) => {
           try {
-            const statusResult = await svc.getStatus(template.contentSid);
-            return {
-              ...template,
-              status: statusResult.success ? statusResult.status : 'unknown'
-            };
+            let finalStatus = template.status || 'unknown';
+            
+            // Try to fetch from Twilio if credentials are available
+            if (hasCredentials) {
+              const statusResult = await svc.getStatus(template.contentSid);
+              if (statusResult.success && statusResult.status) {
+                finalStatus = statusResult.status;
+              }
+            }
+            
+            return { ...template, status: finalStatus };
           } catch (error) {
-            console.error(`Failed to fetch status for ${template.contentSid}:`, error);
-            return { ...template, status: 'unknown' };
+            // Fallback to stored status
+            return { ...template, status: template.status || 'unknown' };
           }
         })
       );
@@ -648,14 +705,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (dateEnd) filters.createdAt.$lte = new Date(dateEnd as string);
       }
 
-      const leads = await mongodbService.getLeads(filters, {
+      const leadsResult = await mongodbService.getLeads(filters, {
         page: Number(page),
         limit: Number(limit),
         sortBy: sortBy as string,
         sortOrder: sortOrder as 'asc' | 'desc'
       });
       
-      res.json(leads);
+      // Calculate engagement scores for leads without scores and with chat history
+      const leadsToUpdate = leadsResult.leads.filter(lead => 
+        lead.engagementScore === 0 && lead.phone
+      );
+      
+      if (leadsToUpdate.length > 0) {
+        // Process in background to not slow down the response
+        setImmediate(async () => {
+          for (const lead of leadsToUpdate) {
+            try {
+              const chatHistory = await mongodbService.getChatHistory(lead.phone);
+              if (chatHistory && chatHistory.messages && chatHistory.messages.length > 0) {
+                const messages = (chatHistory.messages || []).map(m => ({
+                  role: m.role,
+                  content: m.content
+                }));
+                const score = await openaiService.calculateEngagementScore(messages);
+                await mongodbService.updateLeadEngagementScore(lead.phone, score);
+                console.log(`Updated engagement score for ${lead.phone}: ${score}`);
+              }
+            } catch (error) {
+              console.error(`Failed to calculate engagement for ${lead.phone}:`, error);
+            }
+          }
+        });
+      }
+      
+      res.json(leadsResult);
     } catch (error) {
       console.error('Get leads error:', error);
       res.status(500).json({ error: 'Failed to fetch leads' });
@@ -678,10 +762,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/leads', async (req, res) => {
+app.post('/api/leads', async (req, res) => {
     try {
-      const leadData = req.body;
-      const lead = await mongodbService.createLead(leadData);
+      const leadData = req.body || {};
+      const phone = normalizePhoneE164(leadData.phone || '', process.env.DEFAULT_COUNTRY_CODE);
+      if (!phone) return res.status(400).json({ error: 'Phone is required' });
+      await mongodbService.upsertLeadByPhone(phone, { ...leadData, phone });
+      const lead = await mongodbService.getLeadByPhone(phone);
       res.status(201).json(lead);
     } catch (error) {
       console.error('Create lead error:', error);
@@ -1077,6 +1164,129 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error('Upload media error:', error);
       res.status(500).json({ error: 'Failed to upload media' });
+    }
+  });
+
+  // Calculate and update engagement score for a lead based on chat history
+  app.post('/api/leads/:phone/calculate-engagement', async (req, res) => {
+    try {
+      const { phone } = req.params;
+      if (!phone) {
+        return res.status(400).json({ error: 'Phone number is required' });
+      }
+
+      // Get chat history for the phone number
+      const chatHistory = await mongodbService.getChatHistory(phone);
+      if (!chatHistory || !chatHistory.messages || chatHistory.messages.length === 0) {
+        return res.status(400).json({ error: 'No chat history found for this phone' });
+      }
+
+      // Calculate engagement score using OpenAI
+      const messages = (chatHistory.messages || []).map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+      const engagementScore = await openaiService.calculateEngagementScore(messages);
+
+      // Update lead with new engagement score
+      await mongodbService.updateLeadEngagementScore(phone, engagementScore);
+
+      res.json({ success: true, phone, engagementScore });
+    } catch (error) {
+      console.error('Calculate engagement score error:', error);
+      res.status(500).json({ error: 'Failed to calculate engagement score' });
+    }
+  });
+
+  // Debug endpoint to test Twilio connectivity
+  app.get('/api/debug/twilio-status', async (req, res) => {
+    try {
+      const hasAccountSid = !!(process.env.TWILIO_ACCOUNT_SID);
+      const hasAuthToken = !!(process.env.TWILIO_AUTH_TOKEN);
+      
+      if (!hasAccountSid || !hasAuthToken) {
+        return res.json({
+          success: false,
+          error: 'Twilio credentials not configured',
+          credentials: {
+            accountSid: hasAccountSid ? 'SET' : 'MISSING',
+            authToken: hasAuthToken ? 'SET' : 'MISSING'
+          }
+        });
+      }
+      
+      // Test basic connectivity
+      const svc = TwilioContentService.getInstance();
+      const testResult = await fetch('https://content.twilio.com/v1/Content?PageSize=1', {
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64')}`,
+          'Content-Type': 'application/json',
+        }
+      });
+      
+      const isConnected = testResult.ok;
+      
+      res.json({
+        success: isConnected,
+        credentials: {
+          accountSid: 'SET',
+          authToken: 'SET'
+        },
+        connectivity: {
+          status: isConnected ? 'Connected' : 'Failed',
+          httpStatus: testResult.status,
+          statusText: testResult.statusText
+        }
+      });
+    } catch (error) {
+      console.error('Twilio connectivity test failed:', error);
+      res.json({
+        success: false,
+        error: 'Connection test failed',
+        details: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Calculate engagement scores for all leads with chat history
+  app.post('/api/leads/calculate-all-engagement', async (req, res) => {
+    try {
+      const allLeads = await mongodbService.getLeads({}, { limit: 1000 });
+      const results = { updated: 0, skipped: 0, errors: 0 };
+      
+      for (const lead of allLeads.leads) {
+        try {
+          if (!lead.phone) {
+            results.skipped++;
+            continue;
+          }
+          
+          const chatHistory = await mongodbService.getChatHistory(lead.phone);
+          if (!chatHistory?.messages?.length) {
+            results.skipped++;
+            continue;
+          }
+          
+          const messages = chatHistory.messages.map(m => ({
+            role: m.role,
+            content: m.content
+          }));
+          
+          const score = await openaiService.calculateEngagementScore(messages);
+          await mongodbService.updateLeadEngagementScore(lead.phone, score);
+          results.updated++;
+          
+          console.log(`Updated engagement score for ${lead.phone}: ${score}`);
+        } catch (error) {
+          console.error(`Error updating ${lead.phone}:`, error);
+          results.errors++;
+        }
+      }
+      
+      res.json({ success: true, results });
+    } catch (error) {
+      console.error('Bulk calculate engagement error:', error);
+      res.status(500).json({ error: 'Failed to calculate engagement scores' });
     }
   });
 

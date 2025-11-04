@@ -18,6 +18,18 @@ interface LoginData {
   otp: string;
 }
 
+function normalizePhoneE164(input: string, countryCode?: string): string {
+  try {
+    let p = (input || '').toString().trim();
+    p = p.replace(/[\s\-()]/g, '');
+    if (p.startsWith('+')) return '+' + p.replace(/[^\d]/g, '').replace(/^\+/, '');
+    if (p.startsWith('00')) return '+' + p.slice(2).replace(/\D/g, '');
+    const digits = p.replace(/\D/g, '');
+    const cc = (countryCode ?? '+1').replace(/\D/g, '');
+    return digits ? `+${cc}${digits}` : '';
+  } catch { return input; }
+}
+
 export default function Landing() {
   const [isDark, setIsDark] = useState(true);
   const [messages, setMessages] = useState<Message[]>([
@@ -30,7 +42,9 @@ export default function Landing() {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
-  const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp: '' });
+const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp: '' });
+  const [countryCode, setCountryCode] = useState('+1');
+  const [nationalNumber, setNationalNumber] = useState('');
   const [showOtpInput, setShowOtpInput] = useState(false);
   const [otpRequested, setOtpRequested] = useState(false);
   const [isRequestingOtp, setIsRequestingOtp] = useState(false);
@@ -213,8 +227,9 @@ export default function Landing() {
     textareaRef.current?.focus();
   };
 
-  const handleRequestOtp = async () => {
-    if (!loginData.phone || !loginData.name || isRequestingOtp) return;
+const handleRequestOtp = async () => {
+    const computedPhone = normalizePhoneE164(nationalNumber, countryCode);
+    if (!computedPhone || !loginData.name || isRequestingOtp) return;
     setLoginError(null);
     setIsRequestingOtp(true);
 
@@ -224,8 +239,8 @@ export default function Landing() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          phone: loginData.phone,
+body: JSON.stringify({
+          phone: computedPhone,
           name: loginData.name,
         }),
       });
@@ -245,36 +260,22 @@ export default function Landing() {
     }
   };
 
-  // Ensure the lead exists in GMT_Leads after successful login
+// Ensure the lead exists in GMT_Leads after successful login (server upserts)
   const ensureLeadExists = async (name: string, phone: string) => {
     try {
-      const qs = new URLSearchParams({ limit: '1', search: phone });
-      const r = await fetch(`/api/leads?${qs.toString()}`);
-      if (r.ok) {
-        const data = await r.json();
-        const exists = Array.isArray(data?.leads) && data.leads.some((l: any) => (l?.phone || '').trim() === phone.trim());
-        if (!exists) {
-          await fetch('/api/leads', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, phone, status: 'new', engagementScore: 0 })
-          }).catch(() => {});
-        }
-      } else {
-        // If check fails, attempt creation optimistically (handles unique index)
-        await fetch('/api/leads', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, phone, status: 'new', engagementScore: 0 })
-        }).catch(() => {});
-      }
+      await fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone, status: 'new', engagementScore: 0 })
+      }).catch(() => {});
     } catch (e) {
       console.warn('ensureLeadExists failed', e);
     }
   };
 
-  const handleLogin = async () => {
-    if (!loginData.phone || !loginData.name || !loginData.otp) return;
+const handleLogin = async () => {
+    const computedPhone = normalizePhoneE164(nationalNumber, countryCode);
+    if (!computedPhone || !loginData.name || !loginData.otp) return;
 
     try {
       setLoginError(null);
@@ -283,20 +284,20 @@ export default function Landing() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(loginData),
+body: JSON.stringify({ ...loginData, phone: computedPhone }),
       });
 
       if (response.ok) {
         await response.json().catch(() => ({}));
         // Persist auth and profile locally
         localStorage.setItem('auth', 'true');
-        localStorage.setItem('user', JSON.stringify({
+localStorage.setItem('user', JSON.stringify({
           name: loginData.name,
-          phone: loginData.phone
+          phone: computedPhone
         }));
 
         // Ensure the user exists in GMT_Leads on successful login
-        await ensureLeadExists(loginData.name, loginData.phone);
+await ensureLeadExists(loginData.name, computedPhone);
 
         localStorage.removeItem('usedMessages');
         setRemainingMessages(9999);
@@ -628,28 +629,42 @@ export default function Landing() {
                       placeholder="Enter your name"
                     />
                   </div>
-                  <div>
+<div>
                     <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
                       Phone Number
                     </label>
-                    <input
-                      type="tel"
-                      inputMode="tel"
-                      value={loginData.phone}
-                      onChange={(e) => setLoginData({ ...loginData, phone: e.target.value })}
-                      onBlur={() => {
-                        if (loginData.name && loginData.phone && !otpRequested) {
-                          handleRequestOtp();
-                        }
-                      }}
-                      className="w-full px-4 py-2 rounded-lg border focus:outline-none"
-                      style={{
-                        backgroundColor: currentTheme.surfaceBg,
-                        borderColor: currentTheme.border,
-                        color: currentTheme.textPrimary
-                      }}
-                      placeholder="Enter your phone number"
-                    />
+                    <div className="flex gap-2">
+                      <select
+                        value={countryCode}
+                        onChange={(e) => setCountryCode(e.target.value)}
+                        className="px-3 py-2 rounded-lg border focus:outline-none"
+                        style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }}
+                      >
+                        <option value="+1">USA/Canada (+1)</option>
+                        <option value="+91">India (+91)</option>
+                        <option value="+44">UK (+44)</option>
+                        <option value="+61">Australia (+61)</option>
+                        <option value="+971">UAE (+971)</option>
+                      </select>
+                      <input
+                        type="tel"
+                        inputMode="tel"
+                        value={nationalNumber}
+                        onChange={(e) => setNationalNumber(e.target.value.replace(/\D/g, ''))}
+                        onBlur={() => {
+                          if (loginData.name && nationalNumber && !otpRequested) {
+                            handleRequestOtp();
+                          }
+                        }}
+                        className="flex-1 px-4 py-2 rounded-lg border focus:outline-none"
+                        style={{
+                          backgroundColor: currentTheme.surfaceBg,
+                          borderColor: currentTheme.border,
+                          color: currentTheme.textPrimary
+                        }}
+                        placeholder="Enter your number"
+                      />
+                    </div>
                   </div>
                   {showOtpInput && (
                     <div>
@@ -671,7 +686,7 @@ export default function Landing() {
                         placeholder="Enter 6-digit OTP"
                       />
                       <p className="text-xs mt-2" style={{ color: currentTheme.textSecondary }}>
-                        OTP sent to {loginData.phone}. {isRequestingOtp ? 'Sending…' : otpRequested ? 'Didn\'t get it? Re-enter phone to resend.' : ''}
+{(() => { const p = normalizePhoneE164(nationalNumber, countryCode); return `OTP sent to ${p || ''}. ${isRequestingOtp ? 'Sending…' : otpRequested ? 'Didn\'t get it? Re-enter phone to resend.' : ''}`; })()}
                       </p>
                     </div>
                   )}
@@ -681,8 +696,8 @@ export default function Landing() {
                     </div>
                   )}
                   <button
-                    onClick={showOtpInput ? handleLogin : handleRequestOtp}
-                    disabled={showOtpInput ? !(loginData.otp && loginData.otp.length >= 4) : !(loginData.name && loginData.phone) || isRequestingOtp}
+onClick={showOtpInput ? handleLogin : handleRequestOtp}
+                    disabled={showOtpInput ? !(loginData.otp && loginData.otp.length >= 4) : !(loginData.name && nationalNumber) || isRequestingOtp}
                     className="w-full py-2.5 rounded-xl text-sm font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
                     style={{
                       backgroundColor: currentTheme.accentPrimary,

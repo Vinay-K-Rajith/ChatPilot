@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { useChatHistory } from "@/hooks/useChatHistory";
 import ConversationList from "@/components/ConversationList";
 import ChatWindow from "@/components/ChatWindow";
@@ -8,7 +9,19 @@ interface ConversationsProps {}
 
 export default function Conversations({}: ConversationsProps) {
   const [selectedPhoneNumber, setSelectedPhoneNumber] = useState<string>();
+  const [pathname] = useLocation();
   const { updateChatMetadata } = useChatHistory();
+
+  // Handle navigation from Leads page via query parameter
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const phone = params.get('phone');
+      if (phone) {
+        setSelectedPhoneNumber(phone);
+      }
+    }
+  }, [pathname]);
 
   const filterOptions = [
     {
