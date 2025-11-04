@@ -80,21 +80,19 @@ export function ArticleForm({ isOpen, onClose, article, mode }: ArticleFormProps
 
   const onSubmit = async (data: any) => {
     try {
+      const formattedData = {
+        title: data.title,
+        content: data.content,
+        category: data.category === 'none' ? undefined : data.category,
+      };
+
       if (isEditMode && article) {
         await updateKnowledgeDocument.mutateAsync({
           id: article._id,
-          data: {
-            title: data.title,
-            content: data.content,
-            category: data.category === 'none' ? undefined : data.category,
-          }
+          data: formattedData
         });
       } else {
-        await createArticle.mutateAsync({
-          title: data.title,
-          content: data.content,
-          category: data.category === 'none' ? undefined : data.category,
-        });
+        await createArticle.mutateAsync(formattedData);
       }
       
       handleClose();

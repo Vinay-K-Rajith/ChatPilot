@@ -576,14 +576,13 @@ const now = new Date();
     await this.ensureConnected();
     if (!this.collections.leads) throw new Error('Leads collection is not initialized');
     const updateData = { ...(updates as any), updatedAt: new Date() };
-    const result: any = await this.collections.leads.findOneAndUpdate(
-      { _id: new ObjectId(id) } as any,
+    const result = await this.collections.leads.findOneAndUpdate(
+      { _id: new ObjectId(id) },
       { $set: updateData },
-      { returnDocument: 'after' as any }
+      { returnDocument: 'after' }
     );
-    if (!result || !result.value) return null;
-    const doc = result.value;
-    return { ...doc, _id: doc._id?.toString() } as any;
+    if (!result) return null;
+    return { ...result, _id: result._id.toString() };
   }
 
   public async deleteLead(id: string): Promise<boolean> {
@@ -652,9 +651,28 @@ const now = new Date();
   public async createLegacyArticle(articleData: CreateLegacyArticleData): Promise<any> {
     await this.ensureConnected();
     if (!this.collections.legacyArticles) throw new Error('Legacy articles collection is not initialized');
-    const article = { title: (articleData as any).title, content: (articleData as any).content, category: (articleData as any).category } as ServerLegacyArticle;
+    
+    const article: ServerLegacyArticle = {
+      title: articleData.title,
+      content: articleData.content,
+      category: articleData.category
+    };
+    
     const result = await this.collections.legacyArticles.insertOne(article);
-    return { ...article, _id: result.insertedId.toString(), type: 'article', uploadedAt: new Date() } as any;
+    
+    // Convert to LegacyArticle format for frontend
+    const converted = databaseToLegacyArticle({
+      _id: result.insertedId.toString(),
+      title: article.title || '',
+      content: article.content,
+      category: article.category
+    });
+    
+    return {
+      ...converted,
+      type: 'article',
+      uploadedAt: new Date()
+    };
   }
 
   public async getLegacyArticles(query: { search?: string; category?: string; page?: number; limit?: number }): Promise<{ articles: any[]; total: number; page: number; limit: number; totalPages: number; }> {
@@ -710,14 +728,26 @@ const now = new Date();
   public async updateLegacyArticle(id: string, updates: UpdateLegacyArticleData): Promise<any | null> {
     await this.ensureConnected();
     if (!this.collections.legacyArticles) throw new Error('Legacy articles collection is not initialized');
-    const result: any = await this.collections.legacyArticles.findOneAndUpdate(
-      { _id: new ObjectId(id) } as any,
-      { $set: { ...(updates as any) } },
-      { returnDocument: 'after' as any }
+    const result = await this.collections.legacyArticles.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: updates },
+      { returnDocument: 'after' }
     );
-    if (!result || !result.value) return null;
-    const doc = result.value;
-    return { ...doc, _id: doc._id?.toString() } as any;
+    if (!result) return null;
+    
+    // Convert to LegacyArticle format for frontend
+    const converted = databaseToLegacyArticle({
+      _id: result._id.toString(),
+      title: result.title || '',
+      content: result.content,
+      category: result.category
+    });
+    
+    return {
+      ...converted,
+      type: 'article',
+      uploadedAt: new Date()
+    };
   }
 
   public async deleteLegacyArticle(id: string): Promise<boolean> {

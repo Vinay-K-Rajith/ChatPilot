@@ -1,5 +1,6 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -61,9 +62,32 @@ export default function LeadForm({
 
   const statusValue = watch("status");
 
+  // Reset form when initialData changes or dialog opens
+  useEffect(() => {
+    if (initialData) {
+      reset({
+        name: initialData.name || "",
+        phone: initialData.phone || "",
+        email: initialData.email || "",
+        status: initialData.status || "new",
+        engagementScore: initialData.engagementScore || 0,
+      });
+    } else {
+      reset({
+        name: "",
+        phone: "",
+        email: "",
+        status: "new",
+        engagementScore: 0,
+      });
+    }
+  }, [initialData, reset, open]);
+
   const handleFormSubmit = (data: CreateLead) => {
     onSubmit(data);
-    reset();
+    if (!isEditing) {
+      reset();
+    }
   };
 
   const handleClose = () => {
