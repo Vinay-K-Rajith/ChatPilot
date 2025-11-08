@@ -122,7 +122,8 @@ const campaignApi = {
       method: "POST",
     });
     if (!response.ok) throw new Error("Failed to send campaign");
-    return safeJsonResponse(response);
+    const data: any = await safeJsonResponse(response);
+    return (data?.campaign || data) as Campaign;
   },
 
   // Get campaign statistics

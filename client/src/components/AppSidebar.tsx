@@ -10,6 +10,7 @@ import {
   Bot,
   FileText,
   LogOut,
+  GraduationCap,
 } from "lucide-react";
 import { logout } from "@/lib/auth";
 import { useLocation, Link } from "wouter";
@@ -62,6 +63,11 @@ const menuItems: MenuItem[] = [
     title: "Knowledge Base",
     url: "/knowledge",
     icon: BookOpen,
+  },
+  {
+    title: "Training",
+    url: "/training",
+    icon: GraduationCap,
   },
 ] as const;
 

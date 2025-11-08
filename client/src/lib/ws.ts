@@ -1,21 +1,24 @@
 export function connectWebSocket(opts?: { token?: string }) {
   try {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-
-  // Prefer Vite-provided env variable for WS port, else fallback to window.location.port or 3002
-  // Vite exposes env vars as import.meta.env.VITE_*
-  // @ts-ignore
-  const vitePort = (import.meta as any)?.env?.VITE_WS_PORT;
-  const envPort = (vitePort as any) || (window as any).__WS_PORT__;
-
-    const defaultPort = 3002;
-    const port = envPort || window.location.port || defaultPort;
-
+    const isDevelopment = import.meta.env.DEV;
+    
     const host = window.location.hostname || 'localhost';
     const path = '/ws';
     const token = opts?.token || localStorage.getItem('ws_token') || 'guest';
-
-    const wsUrl = `${protocol}://${host}:${port}${path}?token=${encodeURIComponent(token)}`;
+    
+    // In development, use Vite's dev server port so the proxy handles routing to WebSocket server
+    // In production, use the WebSocket server port directly
+    let wsUrl: string;
+    if (isDevelopment) {
+      // Connect to same origin (Vite dev server), Vite proxy will forward to ws://localhost:3002
+      const port = window.location.port || '3000';
+      wsUrl = `${protocol}://${host}:${port}${path}?token=${encodeURIComponent(token)}`;
+    } else {
+      // In production, connect directly to WebSocket server port
+      const wsPort = (window as any).__WS_PORT__ || '3002';
+      wsUrl = `${protocol}://${host}:${wsPort}${path}?token=${encodeURIComponent(token)}`;
+    }
 
     console.log('Connecting WebSocket to', wsUrl);
 

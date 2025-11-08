@@ -89,8 +89,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Get relevant knowledge base context for grounding
       const knowledgeContext = await mongodbService.getRelevantKnowledge(message);
 
-      // Generate response with history and knowledge context
-      const response = await openaiService.generateResponse(message, conversationHistory as any, knowledgeContext);
+      // Get user's name for personalization (from leads if phone provided, or from user input)
+      let userName: string | undefined;
+      if (phoneNorm) {
+        const lead = await mongodbService.getLeadByPhone(phoneNorm);
+        userName = lead?.name && typeof lead.name === 'string' && /^[A-Za-z][A-Za-z'\- ]{1,40}$/.test(lead.name) 
+          ? lead.name 
+          : undefined;
+      }
+      // Fallback to user-provided name if no lead name exists
+      if (!userName && user?.name && typeof user.name === 'string' && /^[A-Za-z][A-Za-z'\- ]{1,40}$/.test(user.name)) {
+        userName = user.name;
+      }
+
+      // Generate response with history, knowledge context, and personalization
+      const response = await openaiService.generateResponse(
+        message, 
+        conversationHistory as any, 
+        knowledgeContext,
+        undefined, // systemPrompt
+        undefined, // pdfContext
+        userName   // userName for personalization
+      );
 
       // Store assistant response
       await mongodbService.addMessageToChatHistory(identifier, 'assistant', response, {
@@ -1037,7 +1057,16 @@ app.post('/api/leads', async (req, res) => {
 
   app.post('/api/campaigns', async (req, res) => {
     try {
-      const campaignData = req.body;
+      const campaignData = req.body || {};
+      // Enforce template-based campaigns only
+      if (!campaignData.templateContentSid) {
+        return res.status(400).json({ error: 'templateContentSid is required and must be an approved WhatsApp template' });
+      }
+      const svc = TwilioContentService.getInstance();
+      const status = await svc.getStatus(campaignData.templateContentSid);
+      if (!status.success || (status.status && status.status.toLowerCase() !== 'approved')) {
+        return res.status(400).json({ error: 'Only approved WhatsApp templates can be used for campaigns' });
+      }
       const campaign = await mongodbService.createCampaign(campaignData);
       res.status(201).json(campaign);
     } catch (error) {
@@ -1049,7 +1078,22 @@ app.post('/api/leads', async (req, res) => {
   app.put('/api/campaigns/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const updateData = req.body;
+      const updateData = req.body || {};
+      // If templateContentSid is set/changed, ensure it's approved (with DB fallback when Twilio creds missing)
+      if (updateData.templateContentSid) {
+        const svc = TwilioContentService.getInstance();
+        const status = await svc.getStatus(updateData.templateContentSid);
+        let isApproved = status.success && status.status && status.status.toLowerCase() === 'approved';
+        if (!isApproved) {
+          try {
+            const dbTemplate = await mongodbService.getWhatsAppTemplateByContentSid(updateData.templateContentSid);
+            isApproved = (dbTemplate?.status || '').toLowerCase() === 'approved';
+          } catch {}
+        }
+        if (!isApproved) {
+          return res.status(400).json({ error: 'Only approved WhatsApp templates can be used for campaigns' });
+        }
+      }
       const campaign = await mongodbService.updateCampaign(id, updateData);
       
       if (!campaign) {
@@ -1114,15 +1158,127 @@ app.post('/api/leads', async (req, res) => {
   app.post('/api/campaigns/:id/send-now', async (req, res) => {
     try {
       const { id } = req.params;
-      // This would trigger immediate campaign execution
-      const campaign = await mongodbService.updateCampaign(id, { status: 'sending', sentAt: new Date() });
-      
-      if (!campaign) {
-        return res.status(404).json({ error: 'Campaign not found' });
+      console.log(`[campaign/send-now] start id=${id}`);
+
+      // Load campaign
+      const campaign = await mongodbService.getCampaignById(id);
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+      // Validate approved WhatsApp template
+      if (!(campaign as any).templateContentSid) {
+        return res.status(400).json({ error: 'Campaign must reference an approved WhatsApp template (contentSid missing)' });
       }
-      
-      // Here you would trigger the actual sending logic
-      res.json(campaign);
+      const contentSid = (campaign as any).templateContentSid as string;
+
+      // Check live approval status (fallback to DB stored status if API unavailable)
+      const svc = TwilioContentService.getInstance();
+      const status = await svc.getStatus(contentSid);
+      let approved = status.success && status.status && status.status.toLowerCase() === 'approved';
+      console.log('[campaign/send-now] template status', { contentSid, status: status.status, success: status.success, approved });
+      if (!approved) {
+        try {
+          const dbTpl = await mongodbService.getWhatsAppTemplateByContentSid(contentSid);
+          approved = (dbTpl?.status || '').toLowerCase() === 'approved';
+          console.log('[campaign/send-now] db status fallback', { dbStatus: dbTpl?.status, approved });
+        } catch (e) { console.warn('[campaign/send-now] db status check failed', e); }
+      }
+      if (!approved) {
+        return res.status(403).json({ error: 'Template is not approved yet. Only approved templates can be used for campaigns.' });
+      }
+
+      // Fetch target leads
+      const leads = await mongodbService.getLeadsByIds((campaign as any).leadIds || []);
+      console.log('[campaign/send-now] recipients', { count: leads.length });
+      if (!leads.length) return res.status(400).json({ error: 'No valid recipients found for this campaign' });
+
+      // Mark campaign as sending
+      await mongodbService.updateCampaign(id, { status: 'sending', sentAt: new Date() } as any);
+
+      // Send messages sequentially to keep it simple and safe
+      const twilioSvc = TwilioService.getInstance();
+      let sent = 0;
+      const failures: Array<{ phone: string; error?: string }> = [];
+
+      for (const lead of leads) {
+        try {
+          const phone = (lead as any).phone;
+          if (!phone) { failures.push({ phone: 'unknown' }); continue; }
+
+          // Build variables for this lead using bindings if provided
+          const sampleVars = ((campaign as any).variables || {}) as Record<string, string>;
+          const bindings = ((campaign as any).variableBindings || {}) as Record<string, string>;
+
+          // If we don't have any variable keys yet, try to obtain them from stored template metadata/body
+          let placeholderKeys: string[] = Object.keys(sampleVars);
+          try {
+            if (placeholderKeys.length === 0) {
+              const tplMeta = await mongodbService.getWhatsAppTemplateByContentSid(contentSid);
+              const varsObj = (tplMeta?.variables || {}) as Record<string,string>;
+              placeholderKeys = Object.keys(varsObj);
+              if (placeholderKeys.length === 0 && tplMeta?.body) {
+                const re = /\{\{(\w+)\}\}/g; let m: RegExpExecArray | null; const s = new Set<string>();
+                while ((m = re.exec(tplMeta.body)) !== null) s.add(m[1]);
+                placeholderKeys = Array.from(s);
+              }
+            }
+          } catch {}
+
+          const getByPath = (obj: any, path?: string): any => {
+            if (!path) return undefined;
+            // allow paths like "lead.name" or just "name"
+            const parts = path.split('.');
+            let cur: any = path.startsWith('lead.') ? { lead: obj } : obj;
+            for (const k of parts) {
+              if (cur == null) return undefined;
+              cur = cur[k];
+            }
+            return cur;
+          };
+
+          const vars: Record<string, string> = {};
+          const keys = placeholderKeys.length > 0 ? placeholderKeys : Object.keys(sampleVars);
+          if (keys.length > 0) {
+            for (const k of keys) {
+              const boundPath = bindings[k];
+              let val = getByPath(lead, boundPath);
+              if (val === undefined) {
+                // fallback by key name if matches lead fields
+                if ((lead as any)[k] !== undefined) val = (lead as any)[k];
+              }
+              vars[k] = String(val ?? sampleVars[k] ?? '');
+            }
+          } else {
+            // Backward compatibility: named variables
+            vars.name = (lead as any).name || '';
+            vars.email = (lead as any).email || '';
+            vars.phone = (lead as any).phone || '';
+            if ((lead as any).company) vars.company = (lead as any).company;
+          }
+
+          console.log('[campaign/send-now] send attempt', { phone, vars });
+          const ok = await twilioSvc.sendContentMessage(phone, contentSid, vars);
+          if (ok) {
+            sent++;
+            try {
+              await mongodbService.upsertLeadByPhone(phone, {});
+              await mongodbService.addMessageToChatHistory(phone, 'assistant', (campaign as any).template, { phone, channel: 'whatsapp', labels: ['campaign', 'whatsapp'] });
+            } catch {}
+          } else {
+            failures.push({ phone });
+            console.warn('[campaign/send-now] send failed', { phone });
+          }
+        } catch (e: any) {
+          failures.push({ phone: (lead as any).phone, error: e?.message });
+          console.error('[campaign/send-now] exception while sending', { phone: (lead as any).phone, error: e?.message });
+        }
+      }
+
+      // Update campaign stats & status
+      const finalStatus = sent >= ((campaign as any).targetCount || leads.length) ? 'completed' : 'active';
+      const updated = await mongodbService.updateCampaign(id, { sentCount: sent, status: finalStatus, lastSentAt: new Date() } as any);
+      console.log('[campaign/send-now] done', { sent, failed: failures.length, status: finalStatus });
+
+      return res.json({ success: true, campaign: updated, sent, failed: failures.length, failures });
     } catch (error) {
       console.error('Send campaign error:', error);
       res.status(500).json({ error: 'Failed to send campaign' });
@@ -1245,6 +1401,213 @@ app.post('/api/leads', async (req, res) => {
         error: 'Connection test failed',
         details: error instanceof Error ? error.message : String(error)
       });
+    }
+  });
+
+  // ============== Training Endpoints ==============
+  
+  // Get all training sections
+  app.get('/api/training/sections', async (req, res) => {
+    try {
+      const sections = await mongodbService.getTrainingSections();
+      res.json({ success: true, sections });
+    } catch (error) {
+      console.error('Get training sections error:', error);
+      res.status(500).json({ error: 'Failed to fetch training sections' });
+    }
+  });
+
+  // Get user's training progress
+  app.get('/api/training/progress/:phone', async (req, res) => {
+    try {
+      const { phone } = req.params;
+      if (!phone) {
+        return res.status(400).json({ error: 'Phone number is required' });
+      }
+      
+      const progress = await mongodbService.getOrCreateTrainingProgress(phone);
+      res.json({ success: true, progress });
+    } catch (error) {
+      console.error('Get training progress error:', error);
+      res.status(500).json({ error: 'Failed to fetch training progress' });
+    }
+  });
+
+  // Chat with training section
+  app.post('/api/training/chat', async (req, res) => {
+    try {
+      const { phone, sectionNo, message } = req.body;
+      
+      if (!phone || !sectionNo || !message) {
+        return res.status(400).json({ error: 'Phone, sectionNo, and message are required' });
+      }
+
+      // Get training progress
+      const progress = await mongodbService.getOrCreateTrainingProgress(phone);
+      const sections = await mongodbService.getTrainingSections();
+      const section = sections.find(s => s.s_no === sectionNo);
+      
+      if (!section) {
+        return res.status(404).json({ error: 'Training section not found' });
+      }
+
+      // Check if user can chat with this section (sequential completion)
+      const canChat = progress.completedSections.includes(sectionNo) || 
+                     progress.completedSections.length === 0 && sectionNo === 1 ||
+                     progress.completedSections.includes(sectionNo - 1);
+      
+      if (!canChat) {
+        return res.status(403).json({ 
+          error: 'You must complete previous sections first',
+          nextAvailable: progress.completedSections.length + 1
+        });
+      }
+
+      // Store user message
+      await mongodbService.addTrainingMessage(phone, sectionNo, 'user', message);
+
+      // Get conversation history for this section
+      const sectionChat = progress.sectionChats?.[sectionNo] || [];
+      const conversationHistory = sectionChat.map(m => ({
+        role: m.role,
+        content: m.content
+      }));
+
+      // Get user's name from leads for personalization
+      const lead = await mongodbService.getLeadByPhone(phone);
+      const userName = lead?.name && typeof lead.name === 'string' && /^[A-Za-z][A-Za-z'\- ]{1,40}$/.test(lead.name) 
+        ? lead.name 
+        : undefined;
+
+      // Generate AI response with personalization
+      const response = await openaiService.generateTrainingResponse(
+        message,
+        section.heading,
+        section.content,
+        conversationHistory,
+        userName
+      );
+
+      // Store assistant response
+      await mongodbService.addTrainingMessage(phone, sectionNo, 'assistant', response);
+
+      res.json({ success: true, response });
+    } catch (error) {
+      console.error('Training chat error:', error);
+      res.status(500).json({ error: 'Failed to process training chat' });
+    }
+  });
+
+  // Mark section as completed
+  app.post('/api/training/complete', async (req, res) => {
+    try {
+      const { phone, sectionNo } = req.body;
+      
+      if (!phone || !sectionNo) {
+        return res.status(400).json({ error: 'Phone and sectionNo are required' });
+      }
+
+      const progress = await mongodbService.getOrCreateTrainingProgress(phone);
+      
+      // Check if user can complete this section (must be current or already completed)
+      const canComplete = progress.completedSections.includes(sectionNo) ||
+                         (progress.completedSections.length === 0 && sectionNo === 1) ||
+                         progress.completedSections.includes(sectionNo - 1);
+      
+      if (!canComplete) {
+        return res.status(403).json({ 
+          error: 'You must complete previous sections first'
+        });
+      }
+
+      await mongodbService.markSectionCompleted(phone, sectionNo);
+      const updatedProgress = await mongodbService.getTrainingProgress(phone);
+      
+      res.json({ success: true, progress: updatedProgress });
+    } catch (error) {
+      console.error('Mark section completed error:', error);
+      res.status(500).json({ error: 'Failed to mark section as completed' });
+    }
+  });
+
+  // Update current section (for navigation)
+  app.post('/api/training/current-section', async (req, res) => {
+    try {
+      const { phone, sectionNo } = req.body;
+      
+      if (!phone || !sectionNo) {
+        return res.status(400).json({ error: 'Phone and sectionNo are required' });
+      }
+
+      await mongodbService.updateCurrentSection(phone, sectionNo);
+      const progress = await mongodbService.getTrainingProgress(phone);
+      
+      res.json({ success: true, progress });
+    } catch (error) {
+      console.error('Update current section error:', error);
+      res.status(500).json({ error: 'Failed to update current section' });
+    }
+  });
+
+  // ============== Training KB CRUD Endpoints ==============
+  
+  // Create training section
+  app.post('/api/training/kb', async (req, res) => {
+    try {
+      const { s_no, heading, content } = req.body;
+      
+      if (!s_no || !heading || !content) {
+        return res.status(400).json({ error: 'Section number, heading, and content are required' });
+      }
+      
+      const section = await mongodbService.createTrainingSection({ s_no, heading, content });
+      res.json({ success: true, section });
+    } catch (error) {
+      console.error('Create training section error:', error);
+      res.status(500).json({ error: 'Failed to create training section' });
+    }
+  });
+  
+  // Update training section
+  app.put('/api/training/kb/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { s_no, heading, content } = req.body;
+      
+      if (!id) {
+        return res.status(400).json({ error: 'Section ID is required' });
+      }
+      
+      const section = await mongodbService.updateTrainingSection(id, { s_no, heading, content });
+      if (!section) {
+        return res.status(404).json({ error: 'Training section not found' });
+      }
+      
+      res.json({ success: true, section });
+    } catch (error) {
+      console.error('Update training section error:', error);
+      res.status(500).json({ error: 'Failed to update training section' });
+    }
+  });
+  
+  // Delete training section
+  app.delete('/api/training/kb/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      if (!id) {
+        return res.status(400).json({ error: 'Section ID is required' });
+      }
+      
+      const success = await mongodbService.deleteTrainingSection(id);
+      if (!success) {
+        return res.status(404).json({ error: 'Training section not found' });
+      }
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Delete training section error:', error);
+      res.status(500).json({ error: 'Failed to delete training section' });
     }
   });
 

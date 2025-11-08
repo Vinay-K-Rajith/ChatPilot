@@ -17,6 +17,7 @@ import Analytics from "@/pages/Analytics";
 import KnowledgeBase from "@/pages/KnowledgeBase";
 import AIUsage from "@/pages/AIUsage";
 import Templates from "@/pages/Templates";
+import Training from "@/pages/Training";
 import NotFound from "@/pages/not-found";
 
 import { isAuthed, validateSession } from "./lib/auth";
@@ -69,6 +70,7 @@ function Router() {
       <Route path="/knowledge" component={() => <ProtectedRoute component={KnowledgeBase} />} />
       <Route path="/ai-usage" component={() => <ProtectedRoute component={AIUsage} />} />
       <Route path="/templates" component={() => <ProtectedRoute component={Templates} />} />
+      <Route path="/training" component={() => <ProtectedRoute component={Training} />} />
       <Route component={NotFound} />
     </Switch>
   );

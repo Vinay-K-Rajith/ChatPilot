@@ -180,7 +180,7 @@ export default function LeadTable({
                             data-testid={`button-contact-${leadId}`}
                           >
                             <MessageSquare className="h-4 w-4 mr-1" />
-                            Contact
+                            Chats
                           </Button>
                         )}
                         {onEditLead && (

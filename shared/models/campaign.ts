@@ -13,9 +13,11 @@ export interface Campaign {
   type: CampaignType;
   status: CampaignStatus;
   
-  // Message content
-  template: string;
-  variables: Record<string, string>; // Variable name -> sample value
+  // Message content (must be an approved WhatsApp template)
+  template: string; // human-readable body preview
+  templateContentSid: string; // Twilio Content SID for approved template
+  variables: Record<string, string>; // Variable key (e.g., "1" or "name") -> sample value for preview
+  variableBindings?: Record<string, string>; // Variable key (e.g., "1") -> lead field path (e.g., "name", "email", "lead.name")
   mediaUrl?: string;
   mediaType?: MediaType;
   
@@ -53,7 +55,9 @@ export const CreateCampaignSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),
   type: z.enum(["broadcast", "drip", "trigger"]),
   template: z.string().min(1, "Template is required"),
+  templateContentSid: z.string().min(1, "Approved WhatsApp template is required"),
   variables: z.record(z.string()).default({}),
+  variableBindings: z.record(z.string()).optional(),
   mediaUrl: z.string().optional(),
   mediaType: z.enum(["image", "video", "document"]).optional(),
   leadIds: z.array(z.string()).min(1, "At least one lead must be selected"),
@@ -86,7 +90,7 @@ export const CreateCampaignSchema = z.object({
 // Allow updating status and optional operational fields
 export const UpdateCampaignSchema = CreateCampaignSchema.partial()
   .extend({
-status: z.enum(["draft", "scheduled", "active", "paused", "completed", "sending"]).optional(),
+    status: z.enum(["draft", "scheduled", "active", "paused", "completed", "sending"]).optional(),
     // operational fields that might be set by the server when sending
     sentAt: z.any().optional(),
   })

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Moon, Sun, TrendingUp, Users, BarChart3, LineChart, MessageSquare } from 'lucide-react';
+import { Send, Bot, User, Moon, Sun, TrendingUp, Users, BarChart3, LineChart, MessageSquare, BookOpen, CheckCircle, Circle, Lock } from 'lucide-react';
 import { useLocation } from 'wouter';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
@@ -16,6 +16,22 @@ interface LoginData {
   name: string;
   phone: string;
   otp: string;
+}
+
+interface TrainingSection {
+  _id: string | any;
+  s_no: number;
+  heading: string;
+  content: string;
+}
+
+interface TrainingProgress {
+  phone: string;
+  completedSections: number[];
+  currentSection: number;
+  sectionChats: {
+    [key: number]: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string | Date }>;
+  };
 }
 
 function normalizePhoneE164(input: string, countryCode?: string): string {
@@ -54,7 +70,7 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
     const authed = localStorage.getItem('auth') === 'true';
     if (authed) return 9999;
     const used = parseInt(localStorage.getItem('usedMessages') || '0');
-    return Math.max(0, 10 - used);
+    return Math.max(0, 4 - used);
   });
   // UI state for smooth welcome->chat transition
   const [hasChatted, setHasChatted] = useState(false);
@@ -64,6 +80,16 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
   const [, navigate] = useLocation();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const trainingMessagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Training state
+  const [activeTab, setActiveTab] = useState<'chat' | 'training'>('chat');
+  const [trainingSections, setTrainingSections] = useState<TrainingSection[]>([]);
+  const [trainingProgress, setTrainingProgress] = useState<TrainingProgress | null>(null);
+  const [selectedSection, setSelectedSection] = useState<number | null>(null);
+  const [trainingMessages, setTrainingMessages] = useState<Message[]>([]);
+  const [isTrainingTyping, setIsTrainingTyping] = useState(false);
+  const [hasChatInSection, setHasChatInSection] = useState(false);
 
   const suggestions = [
     'Analyze sales trends',
@@ -129,6 +155,43 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
     } catch {}
   }, []);
 
+  // Fetch training data for logged-in user
+  useEffect(() => {
+    const authed = localStorage.getItem('auth') === 'true';
+    if (!authed) return;
+    let u: any = null;
+    try { u = JSON.parse(localStorage.getItem('user') || 'null'); } catch {}
+    if (!u?.phone) return;
+
+    fetch('/api/training/sections')
+      .then(r => r.json())
+      .then(data => { if (data?.success) setTrainingSections(data.sections || []); })
+      .catch(() => {});
+
+    fetch(`/api/training/progress/${encodeURIComponent(u.phone)}`)
+      .then(r => r.json())
+      .then(data => { if (data?.success) setTrainingProgress(data.progress); })
+      .catch(() => {});
+  }, []);
+
+  // Auto-select first incomplete section when training tab is opened
+  useEffect(() => {
+    if (activeTab !== 'training' || selectedSection !== null || trainingSections.length === 0) return;
+    
+    // Find first incomplete section that user can chat with
+    const firstIncomplete = trainingSections.find(s => {
+      const isCompleted = trainingProgress?.completedSections?.includes(s.s_no);
+      return !isCompleted && canChatWithSection(s.s_no);
+    });
+    
+    if (firstIncomplete) {
+      handleSectionSelect(firstIncomplete.s_no);
+    } else if (trainingSections.length > 0) {
+      // If all are complete or none available, select the first one (users can still read it)
+      handleSectionSelect(trainingSections[0].s_no);
+    }
+  }, [activeTab, trainingSections, trainingProgress, selectedSection]);
+
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -149,7 +212,7 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         const used = parseInt(localStorage.getItem('usedMessages') || '0');
-        setRemainingMessages(Math.max(0, 10 - used));
+        setRemainingMessages(Math.max(0, 4 - used));
         setShowUserPopup(false);
         setShowLogin(true);
       }
@@ -204,8 +267,8 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
       if (!authed) {
         const used = parseInt(localStorage.getItem('usedMessages') || '0') + 1;
         localStorage.setItem('usedMessages', used.toString());
-        setRemainingMessages(Math.max(0, 10 - used));
-        if (10 - used <= 0) {
+        setRemainingMessages(Math.max(0, 4 - used));
+        if (4 - used <= 0) {
           setShowLogin(true);
         }
       }
@@ -218,7 +281,11 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      if (activeTab === 'training') {
+        handleTrainingSend();
+      } else {
+        handleSend();
+      }
     }
   };
 
@@ -226,6 +293,76 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
     setInput(suggestion);
     textareaRef.current?.focus();
   };
+
+  // Training helpers
+  const canChatWithSection = (sectionNo: number): boolean => {
+    if (!trainingProgress) return sectionNo === 1;
+    return trainingProgress.completedSections.includes(sectionNo) ||
+           (trainingProgress.completedSections.length === 0 && sectionNo === 1) ||
+           trainingProgress.completedSections.includes(sectionNo - 1);
+  };
+
+  const handleSectionSelect = async (sectionNo: number) => {
+    setSelectedSection(sectionNo);
+    setHasChatInSection(false);
+    // Build messages from stored section chats if available
+    if (trainingProgress && trainingProgress.sectionChats?.[sectionNo]) {
+      const hist = trainingProgress.sectionChats[sectionNo];
+      const m = hist.map((h, idx) => ({ id: idx + 1, type: h.role === 'assistant' ? 'bot' : 'user', text: h.content } as Message));
+      setTrainingMessages(m);
+      setHasChatInSection(hist.length > 0);
+    } else {
+      setTrainingMessages([]);
+    }
+
+    // Update current section on server (best-effort)
+    try {
+      const u = JSON.parse(localStorage.getItem('user') || 'null');
+      if (u?.phone) {
+        await fetch('/api/training/current-section', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: u.phone, sectionNo }) });
+      }
+    } catch {}
+  };
+
+  const handleTrainingSend = async () => {
+    if (!input.trim() || isTrainingTyping || selectedSection == null) return;
+    const u = JSON.parse(localStorage.getItem('user') || 'null');
+    if (!u?.phone) return;
+
+    const userMessage = { id: trainingMessages.length + 1, type: 'user' as const, text: input };
+    setTrainingMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsTrainingTyping(true);
+
+    // Mark section as started (will auto-complete on first chat)
+    if (!hasChatInSection) {
+      setHasChatInSection(true);
+      // Auto-complete the section after first message
+      try {
+        const r = await fetch('/api/training/complete', { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify({ phone: u.phone, sectionNo: selectedSection }) 
+        });
+        const d = await r.json();
+        if (d?.success) setTrainingProgress(d.progress);
+      } catch {}
+    }
+
+    try {
+      const response = await fetch('/api/training/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: u.phone, sectionNo: selectedSection, message: userMessage.text })
+      });
+      const data = await response.json();
+      setIsTrainingTyping(false);
+      const botText = response.ok && data?.success ? data.response : (data?.error || "I'm sorry, I encountered an error.");
+      setTrainingMessages(prev => [...prev, { id: prev.length + 2, type: 'bot', text: botText, animated: true }]);
+    } catch (e) {
+      setIsTrainingTyping(false);
+    }
+  };
+
 
 const handleRequestOtp = async () => {
     const computedPhone = normalizePhoneE164(nationalNumber, countryCode);
@@ -313,25 +450,19 @@ await ensureLeadExists(loginData.name, computedPhone);
   };
 
   return (
-    <div className="relative min-h-screen flex flex-col overflow-hidden" style={{ 
+    <div className="min-h-screen flex flex-col" style={{ 
       backgroundColor: currentTheme.bg,
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif"
     }}>
-      {/* Animated background + orbs */}
-      <div className="absolute inset-0 -z-10 gradient-animated opacity-30" />
-      <div className="absolute inset-0 -z-10 radial-bg" />
-      <div className="absolute -z-10 orb orb-1 -top-10 -left-10" />
-      <div className="absolute -z-10 orb orb-2 top-1/3 -right-10" />
-      <div className="absolute -z-10 orb orb-3 -bottom-10 left-1/4" />
 
-      {/* Sticky Nav */}
-      <header className="sticky top-0 z-40 border-b backdrop-blur-glass" style={{ borderColor: currentTheme.border }}>
+      {/* Header */}
+      <header className="border-b" style={{ borderColor: currentTheme.border, backgroundColor: currentTheme.surfaceBg }}>
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-5 h-5" style={{ color: currentTheme.textSecondary }} />
               <h2 className="text-base md:text-lg font-extrabold tracking-tight gradient-text" style={{ color: currentTheme.textPrimary, fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
-                ChatPilot
+                Genie
               </h2>
             </div>
           </div>
@@ -401,325 +532,316 @@ await ensureLeadExists(loginData.name, computedPhone);
         </div>
       </header>
 
-      {/* Main */}
-      <div className="flex-1 flex flex-col">
-      {/* Messages Area + Hero */}
-        <div className="flex-1 overflow-y-auto scrollbar-thin">
-          <div className="max-w-[1280px] mx-auto px-4 py-8">
-            {/* Hero (stays mounted and fades out when chat starts) */}
-            <section
-              className={[
-                'flex items-center justify-center pt-24 md:pt-32 transition-all duration-500',
-                hasChatted ? 'opacity-0 translate-y-[-16px] h-0 py-0 mb-0 overflow-hidden' : 'min-h-[40vh] opacity-100'
-              ].join(' ')}
-            >
-              <div className="w-full max-w-4xl text-center">
-                <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight gradient-text" style={{ fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
-                  Welcome to GMT's ChatPilot
-                </h1>
-                <p className="mt-2 md:mt-3 text-sm md:text-lg" style={{ color: currentTheme.textSecondary }}>
-                  Your AI assistant for professional customer conversations and insights.
-                </p>
-
-                {/* Previous chat access for logged-in users */}
-                {localStorage.getItem('auth') === 'true' && previousChat?.messages?.length ? (
-                  <div className="mt-6 flex items-center justify-center">
-                    <button
-                      onClick={() => {
-                        const baseId = messages.length + 1;
-                        const converted = previousChat!.messages.map((m, idx) => ({
-                          id: baseId + idx,
-                          type: m.role === 'assistant' ? 'bot' : 'user',
-                          text: m.content
-                        } as Message));
-                        setMessages(prev => prev.length > 1 ? prev : [prev[0], ...converted]);
-                        setHasChatted(true);
-                      }}
-                      className="px-4 py-2 rounded-lg text-sm font-medium transition-all border hover-elevate"
-                      style={{ color: currentTheme.textPrimary, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)', borderColor: currentTheme.border }}
-                    >
-                      Continue previous conversation
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            </section>
-
-            {/* Messages list */}
-            {messages.length > 0 && (
-              <>
-                {messages.map((message) => (
-                  <div key={message.id} className="mb-5">
-                    <div className="flex gap-4">
-                      {/* Avatar */}
-                      <div className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
-                        style={{ 
-                          backgroundColor: message.type === 'bot' ? currentTheme.accentPrimary : currentTheme.hoverBg,
-                          boxShadow: message.type === 'bot' ? currentTheme.glow : 'none'
-                        }}>
-                        {message.type === 'bot' ? (
-                          <Bot className="w-5 h-5" style={{ color: '#ffffff' }} strokeWidth={2.5} />
-                        ) : (
-                          <User className="w-4 h-4" style={{ color: currentTheme.textPrimary }} strokeWidth={2.5} />
-                        )}
-                      </div>
-                      
-                      {/* Message Content */}
-                      <div className="flex-1 space-y-2">
-                        <div className="font-bold text-sm" style={{ color: currentTheme.textPrimary }}>
-                          {message.type === 'bot' ? 'Global Metal Direct' : 'You'}
-                        </div>
-                        <div className="text-sm leading-6">
-                          {message.type === 'bot' ? (
-                            message.animated ? (
-                              <TypingMarkdown text={message.text} invert={isDark} speed={24} onDone={() => {
-                                setMessages(prev => prev.map(m => m.id === message.id ? { ...m, animated: false } : m));
-                              }} />
-                            ) : (
-                              <MarkdownRenderer text={message.text} invert={isDark} />
-                            )
-                          ) : (
-                            <MarkdownRenderer text={message.text} invert={isDark} />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Typing Indicator */}
-                {isTyping && (
-                  <div className="mb-5">
-                    <div className="flex gap-4">
-                      <div className="flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
-                        style={{ 
-                          backgroundColor: currentTheme.accentPrimary,
-                          boxShadow: currentTheme.glow
-                        }}>
-                        <Bot className="w-5 h-5" style={{ color: '#ffffff' }} strokeWidth={2.5} />
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <div className="font-bold text-sm mb-1" style={{ color: currentTheme.textPrimary }}>
-                          Global Metal Direct
-                        </div>
-                        <div className="flex gap-1.5">
-                          <div className="w-2 h-2 rounded-full animate-bounce" 
-                            style={{ 
-                              backgroundColor: currentTheme.accentPrimary,
-                              animationDelay: '0ms'
-                            }}></div>
-                          <div className="w-2 h-2 rounded-full animate-bounce" 
-                            style={{ 
-                              backgroundColor: currentTheme.accentPrimary,
-                              animationDelay: '150ms'
-                            }}></div>
-                          <div className="w-2 h-2 rounded-full animate-bounce" 
-                            style={{ 
-                              backgroundColor: currentTheme.accentPrimary,
-                              animationDelay: '300ms'
-                            }}></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
-
-        {/* Input Area */}
-        <div className="border-t backdrop-blur-glass" style={{ 
-          borderColor: currentTheme.border,
-          backgroundColor: currentTheme.surfaceBg
-        }}>
-          <div className="max-w-3xl mx-auto px-4 py-6">
-            {!showLogin ? (
-              <>
-                {/* Quick-start prompts */}
-                <div className="mb-3 flex flex-wrap gap-2">
-                  {['What can you do?','Summarize my last chat','Create a follow-up reply'].map((p, i) => (
-                    <button key={i} onClick={() => handleSuggestion(p)} className="px-3 py-1.5 rounded-lg text-xs border hover-elevate transition" style={{ backgroundColor: currentTheme.surfaceBg, color: currentTheme.textSecondary, borderColor: currentTheme.border }}>
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <div className="relative flex items-end gap-2 rounded-3xl border transition-all duration-200" 
-                style={{ 
-                  backgroundColor: currentTheme.inputBg,
-                  borderColor: currentTheme.border,
-                  boxShadow: currentTheme.shadow
-                }}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = currentTheme.accentPrimary;
-                  e.currentTarget.style.boxShadow = currentTheme.glow;
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = currentTheme.border;
-                  e.currentTarget.style.boxShadow = currentTheme.shadow;
-                }}>
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder={remainingMessages > 0 ? "Message ChatPilot..." : "Please login to continue chatting"}
-                  disabled={remainingMessages <= 0}
-                  rows={1}
-                  className="flex-1 px-4 py-4 md:py-5 bg-transparent resize-none focus:outline-none text-sm"
+      {/* Main Content Area */}
+      <div className="flex-1 flex" style={{ minHeight: 0 }}>
+        {/* Sidebar - only when logged in */}
+        {localStorage.getItem('auth') === 'true' && (
+          <div className="w-64 border-r flex-shrink-0 flex flex-col" style={{ backgroundColor: currentTheme.sidebarBg, borderColor: currentTheme.border, height: 'calc(100vh - 61px)' }}>
+            {/* Tabs */}
+            <div className="p-3 border-b" style={{ borderColor: currentTheme.border }}>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setActiveTab('chat')} 
+                  className="flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all" 
                   style={{ 
-                    color: currentTheme.textPrimary,
-                    maxHeight: '200px',
-                    lineHeight: '1.6'
+                    backgroundColor: activeTab==='chat'?currentTheme.accentPrimary:'transparent', 
+                    color: activeTab==='chat'?'#ffffff':currentTheme.textPrimary, 
+                    border: `1px solid ${activeTab==='chat'?currentTheme.accentPrimary:currentTheme.border}` 
                   }}
-                />
-                <button
-                  onClick={handleSend}
-                  disabled={!input.trim() || remainingMessages <= 0}
-                  className="m-2.5 p-3 rounded-xl transition-all duration-200 flex-shrink-0"
-                  style={{
-                    backgroundColor: input.trim() && remainingMessages > 0 ? currentTheme.accentPrimary : currentTheme.hoverBg,
-                    color: input.trim() && remainingMessages > 0 ? '#ffffff' : currentTheme.textTertiary,
-                    cursor: input.trim() && remainingMessages > 0 ? 'pointer' : 'not-allowed',
-                    opacity: input.trim() && remainingMessages > 0 ? 1 : 0.5,
-                    boxShadow: input.trim() && remainingMessages > 0 ? currentTheme.glow : 'none'
+                >
+                  <MessageSquare className="w-4 h-4 inline mr-1" /> Chat
+                </button>
+                <button 
+                  onClick={() => setActiveTab('training')} 
+                  className="flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all" 
+                  style={{ 
+                    backgroundColor: activeTab==='training'?currentTheme.accentPrimary:'transparent', 
+                    color: activeTab==='training'?'#ffffff':currentTheme.textPrimary, 
+                    border: `1px solid ${activeTab==='training'?currentTheme.accentPrimary:currentTheme.border}` 
                   }}
-                  onMouseEnter={(e) => {
-                    if (input.trim() && remainingMessages > 0) {
-                      e.currentTarget.style.backgroundColor = currentTheme.accentHover;
-                      e.currentTarget.style.transform = 'scale(1.06)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (input.trim() && remainingMessages > 0) {
-                      e.currentTarget.style.backgroundColor = currentTheme.accentPrimary;
-                      e.currentTarget.style.transform = 'scale(1)';
-                    }
-                  }}>
-                  <Send className="w-4 h-4" strokeWidth={2.5} />
+                >
+                  <BookOpen className="w-4 h-4 inline mr-1" /> Training
                 </button>
               </div>
-              </>
-            ) : (
-              <div className="p-6 rounded-2xl border" style={{
-                backgroundColor: currentTheme.inputBg,
-                borderColor: currentTheme.border,
-                boxShadow: currentTheme.shadow
-              }}>
-                <h3 className="text-lg font-bold mb-4" style={{ color: currentTheme.textPrimary }}>
-                  Continue Chatting
-                </h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
-                      Name
-                    </label>
-                    <input
-                      type="text"
-                      value={loginData.name}
-                      onChange={(e) => setLoginData({ ...loginData, name: e.target.value })}
-                      className="w-full px-4 py-2 rounded-lg border focus:outline-none"
-                      style={{
-                        backgroundColor: currentTheme.surfaceBg,
-                        borderColor: currentTheme.border,
-                        color: currentTheme.textPrimary
+            </div>
+            
+            {activeTab === 'training' ? (
+              <div className="flex-1 overflow-y-auto p-3">
+                <div className="text-xs font-semibold mb-2 px-2" style={{ color: currentTheme.textTertiary }}>TRAINING SECTIONS</div>
+                {trainingSections.length > 0 ? trainingSections.map((s) => {
+                  const isCompleted = !!trainingProgress?.completedSections?.includes(s.s_no);
+                  const canChat = canChatWithSection(s.s_no);
+                  const isActive = selectedSection === s.s_no;
+                  return (
+                    <button 
+                      key={s.s_no} 
+                      onClick={() => handleSectionSelect(s.s_no)} 
+                      className="w-full text-left px-3 py-2.5 rounded-lg flex items-start gap-2 mb-1 transition-all" 
+                      style={{ 
+                        backgroundColor: isActive?currentTheme.hoverBg:'transparent', 
+                        color: currentTheme.textPrimary,
+                        cursor: 'pointer',
+                        opacity: 1
                       }}
-                      placeholder="Enter your name"
-                    />
-                  </div>
-<div>
-                    <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
-                      Phone Number
-                    </label>
-                    <div className="flex gap-2">
-                      <select
-                        value={countryCode}
-                        onChange={(e) => setCountryCode(e.target.value)}
-                        className="px-3 py-2 rounded-lg border focus:outline-none"
-                        style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }}
-                      >
-                        <option value="+1">USA/Canada (+1)</option>
-                        <option value="+91">India (+91)</option>
-                        <option value="+44">UK (+44)</option>
-                        <option value="+61">Australia (+61)</option>
-                        <option value="+971">UAE (+971)</option>
-                      </select>
-                      <input
-                        type="tel"
-                        inputMode="tel"
-                        value={nationalNumber}
-                        onChange={(e) => setNationalNumber(e.target.value.replace(/\D/g, ''))}
-                        onBlur={() => {
-                          if (loginData.name && nationalNumber && !otpRequested) {
-                            handleRequestOtp();
-                          }
-                        }}
-                        className="flex-1 px-4 py-2 rounded-lg border focus:outline-none"
-                        style={{
-                          backgroundColor: currentTheme.surfaceBg,
-                          borderColor: currentTheme.border,
-                          color: currentTheme.textPrimary
-                        }}
-                        placeholder="Enter your number"
-                      />
-                    </div>
-                  </div>
-                  {showOtpInput && (
-                    <div>
-                      <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
-                        OTP
-                      </label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={6}
-                        value={loginData.otp}
-                        onChange={(e) => setLoginData({ ...loginData, otp: e.target.value.replace(/\D/g, '') })}
-                        className="w-full px-4 py-2 rounded-lg border focus:outline-none"
-                        style={{
-                          backgroundColor: currentTheme.surfaceBg,
-                          borderColor: currentTheme.border,
-                          color: currentTheme.textPrimary
-                        }}
-                        placeholder="Enter 6-digit OTP"
-                      />
-                      <p className="text-xs mt-2" style={{ color: currentTheme.textSecondary }}>
-{(() => { const p = normalizePhoneE164(nationalNumber, countryCode); return `OTP sent to ${p || ''}. ${isRequestingOtp ? 'Sending…' : otpRequested ? 'Didn\'t get it? Re-enter phone to resend.' : ''}`; })()}
-                      </p>
-                    </div>
-                  )}
-                  {loginError && (
-                    <div className="text-sm bg-red-500/10 border border-red-500/30 text-red-300 px-3 py-2 rounded-lg">
-                      {loginError}
-                    </div>
-                  )}
-                  <button
-onClick={showOtpInput ? handleLogin : handleRequestOtp}
-                    disabled={showOtpInput ? !(loginData.otp && loginData.otp.length >= 4) : !(loginData.name && nationalNumber) || isRequestingOtp}
-                    className="w-full py-2.5 rounded-xl text-sm font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed"
-                    style={{
-                      backgroundColor: currentTheme.accentPrimary,
-                      color: '#ffffff',
-                      boxShadow: currentTheme.glow
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = currentTheme.accentHover;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = currentTheme.accentPrimary;
-                    }}>
-                    {showOtpInput ? 'Verify & Continue' : (isRequestingOtp ? 'Sending OTP…' : 'Request OTP')}
-                  </button>
-                </div>
+                    >
+                      {isCompleted ? <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: '#10b981' }} /> : canChat ? <Circle className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: currentTheme.textTertiary }} />}
+                      <span className="text-sm font-medium" style={{ wordBreak: 'break-word' }}>{s.s_no}. {s.heading}</span>
+                    </button>
+                  );
+                }) : (
+                  <div className="text-xs text-center py-4" style={{ color: currentTheme.textTertiary }}>No training sections available</div>
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 p-4">
+                <div className="text-sm" style={{ color: currentTheme.textSecondary }}>Switch to Training tab to view sections</div>
               </div>
             )}
-            <p className="text-sm text-center mt-3 font-medium" style={{ color: currentTheme.textTertiary }}>
-              {showLogin ? 
-                "Login to continue the conversation and access all features." :
-                "ChatPilot can make mistakes. Consider checking important information."}
-            </p>
+          </div>
+        )}
+
+        {/* Main content panel */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto">
+            <div className="max-w-4xl mx-auto px-4 py-6">
+              {activeTab === 'chat' ? (
+                <>
+                  {/* Hero (stays mounted and fades out when chat starts) */}
+                  <section className={[ 'flex items-center justify-center pt-16 md:pt-24 transition-all duration-500', hasChatted ? 'opacity-0 translate-y-[-16px] h-0 py-0 mb-0 overflow-hidden' : 'min-h-[30vh] opacity-100' ].join(' ')}>
+                    <div className="w-full text-center">
+                      <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight gradient-text" style={{ fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
+                        GMD Genie
+                      </h1>
+                      <p className="mt-2 text-sm md:text-base" style={{ color: currentTheme.textSecondary }}>
+                        Your AI assistant for professional customer conversations and insights.
+                      </p>
+                      {localStorage.getItem('auth') === 'true' && previousChat?.messages?.length ? (
+                        <div className="mt-4 flex items-center justify-center">
+                          <button onClick={() => { const baseId = messages.length + 1; const converted = previousChat!.messages.map((m, idx) => ({ id: baseId + idx, type: m.role === 'assistant' ? 'bot' : 'user', text: m.content } as Message)); setMessages(prev => prev.length > 1 ? prev : [prev[0], ...converted]); setHasChatted(true); }} className="px-4 py-2 rounded-lg text-sm font-medium transition-all border hover-elevate" style={{ color: currentTheme.textPrimary, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)', borderColor: currentTheme.border }}>Continue previous conversation</button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+
+                  {messages.length > 0 && (
+                    <>
+                      {messages.map((message) => (
+                        <div key={message.id} className="mb-6">
+                          <div className="flex gap-3">
+                            <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: message.type === 'bot' ? currentTheme.accentPrimary : currentTheme.hoverBg }}>
+                              {message.type === 'bot' ? (<Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />) : (<User className="w-4 h-4" style={{ color: currentTheme.textPrimary }} strokeWidth={2.5} />)}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm mb-1" style={{ color: currentTheme.textPrimary }}>
+                                {message.type === 'bot' ? 'Global Metal Direct' : 'You'}
+                              </div>
+                              <div className="text-sm leading-relaxed" style={{ color: currentTheme.textPrimary }}>
+                                {message.type === 'bot' ? (message.animated ? (<TypingMarkdown text={message.text} invert={isDark} speed={24} onDone={() => { setMessages(prev => prev.map(m => m.id === message.id ? { ...m, animated: false } : m)); }} />) : (<MarkdownRenderer text={message.text} invert={isDark} />)) : (<MarkdownRenderer text={message.text} invert={isDark} />)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      {isTyping && (
+                        <div className="mb-6">
+                          <div className="flex gap-3">
+                            <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
+                              <Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm mb-2" style={{ color: currentTheme.textPrimary }}>
+                                Global Metal Direct
+                              </div>
+                              <div className="flex gap-1.5">
+                                <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '0ms' }}></div>
+                                <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '150ms' }}></div>
+                                <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '300ms' }}></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  <div ref={messagesEndRef} />
+                </>
+              ) : (
+                // Training tab content
+                <>
+                  {selectedSection && trainingSections.find(s => s.s_no === selectedSection) ? (
+                    <div className="mb-6">
+                      <div className="flex items-start justify-between gap-4 mb-3">
+                        <h2 className="text-xl md:text-2xl font-bold" style={{ color: currentTheme.textPrimary }}>
+                          {trainingSections.find(s => s.s_no === selectedSection)!.heading}
+                        </h2>
+                        {(trainingProgress?.completedSections || []).includes(selectedSection) && (
+                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            <span>Completed</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="p-4 rounded-lg mb-4" style={{ backgroundColor: currentTheme.surfaceBg, border: `1px solid ${currentTheme.border}` }}>
+                        <MarkdownRenderer text={trainingSections.find(s => s.s_no === selectedSection)!.content} invert={isDark} />
+                      </div>
+                      {!canChatWithSection(selectedSection) ? (
+                        <div className="px-4 py-3 rounded-lg flex items-start gap-3 mb-4" style={{ backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.1)', border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.3)'}` }}>
+                          <div className="flex-shrink-0 mt-0.5">
+                            <Lock className="w-5 h-5" style={{ color: '#ef4444' }} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium mb-1" style={{ color: currentTheme.textPrimary }}>
+                              Section Locked
+                            </p>
+                            <p className="text-xs" style={{ color: currentTheme.textSecondary }}>
+                              Complete the previous section to unlock chat for this section. You can read the content above, but chatting is disabled until you progress through the training.
+                            </p>
+                          </div>
+                        </div>
+                      ) : !(trainingProgress?.completedSections || []).includes(selectedSection) && (
+                        <div className="px-4 py-3 rounded-lg flex items-start gap-3 mb-4" style={{ backgroundColor: isDark ? 'rgba(107, 133, 153, 0.1)' : 'rgba(100, 116, 139, 0.1)', border: `1px solid ${currentTheme.border}` }}>
+                          <div className="flex-shrink-0 mt-0.5">
+                            <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
+                              <span className="text-white text-xs font-bold">!</span>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium mb-1" style={{ color: currentTheme.textPrimary }}>
+                              Start chatting to complete this section
+                            </p>
+                            <p className="text-xs" style={{ color: currentTheme.textSecondary }}>
+                              Once you send your first message, this section will be marked as complete automatically.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+
+                  {trainingMessages.map((message) => (
+                    <div key={message.id} className="mb-6">
+                      <div className="flex gap-3">
+                        <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: message.type === 'bot' ? currentTheme.accentPrimary : currentTheme.hoverBg }}>
+                          {message.type === 'bot' ? (<Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />) : (<User className="w-4 h-4" style={{ color: currentTheme.textPrimary }} strokeWidth={2.5} />)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm mb-1" style={{ color: currentTheme.textPrimary }}>
+                            {message.type === 'bot' ? 'GMD Genie' : 'You'}
+                          </div>
+                          <div className="text-sm leading-relaxed" style={{ color: currentTheme.textPrimary }}>
+                            {message.type === 'bot' ? (message.animated ? (<TypingMarkdown text={message.text} invert={isDark} speed={24} onDone={() => { setTrainingMessages(prev => prev.map(m => m.id === message.id ? { ...m, animated: false } : m)); }} />) : (<MarkdownRenderer text={message.text} invert={isDark} />)) : (<MarkdownRenderer text={message.text} invert={isDark} />)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {isTrainingTyping && (
+                    <div className="mb-6">
+                      <div className="flex gap-3">
+                        <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
+                          <Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm mb-2" style={{ color: currentTheme.textPrimary }}>
+                            GMD Genie
+                          </div>
+                          <div className="flex gap-1.5">
+                            <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '0ms' }}></div>
+                            <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '150ms' }}></div>
+                            <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '300ms' }}></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div ref={trainingMessagesEndRef} />
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Input Area */}
+          <div className="border-t" style={{ borderColor: currentTheme.border, backgroundColor: currentTheme.surfaceBg }}>
+            <div className="max-w-3xl mx-auto px-4 py-4">
+              {!showLogin ? (
+                <>
+                  {activeTab === 'chat' && (
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      {['What can you do?','Summarize my last chat','Create a follow-up reply'].map((p, i) => (
+                        <button key={i} onClick={() => handleSuggestion(p)} className="px-3 py-1.5 rounded-lg text-xs border hover-elevate transition" style={{ backgroundColor: currentTheme.surfaceBg, color: currentTheme.textSecondary, borderColor: currentTheme.border }}>
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="relative flex items-end gap-2 rounded-2xl border transition-all" style={{ backgroundColor: currentTheme.inputBg, borderColor: currentTheme.border }}>
+                    <textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyPress={handleKeyPress}
+                      placeholder={activeTab === 'training' ? (selectedSection == null ? 'Select a section first' : !canChatWithSection(selectedSection) ? 'Complete previous sections to unlock chat' : 'Ask about this section...') : (remainingMessages > 0 ? 'Message Genie...' : 'Please login to continue chatting')}
+                      disabled={activeTab === 'training' ? (selectedSection == null || !canChatWithSection(selectedSection)) : remainingMessages <= 0}
+                      rows={1}
+                      className="flex-1 px-4 py-3 bg-transparent resize-none focus:outline-none text-sm"
+                      style={{ color: currentTheme.textPrimary, maxHeight: '150px', lineHeight: '1.5' }}
+                    />
+                    <button onClick={activeTab === 'training' ? handleTrainingSend : handleSend} disabled={!input.trim() || (activeTab === 'training' ? (selectedSection == null || !canChatWithSection(selectedSection)) : remainingMessages <= 0)} className="m-2 p-2.5 rounded-lg transition-all flex-shrink-0" style={{ backgroundColor: input.trim() && (activeTab === 'training' ? (selectedSection != null && canChatWithSection(selectedSection)) : remainingMessages > 0) ? currentTheme.accentPrimary : currentTheme.hoverBg, color: input.trim() && (activeTab === 'training' ? (selectedSection != null && canChatWithSection(selectedSection)) : remainingMessages > 0) ? '#ffffff' : currentTheme.textTertiary }}>
+                      <Send className="w-4 h-4" strokeWidth={2.5} />
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="p-6 rounded-2xl border" style={{ backgroundColor: currentTheme.inputBg, borderColor: currentTheme.border, boxShadow: currentTheme.shadow }}>
+                  <h3 className="text-lg font-bold mb-4" style={{ color: currentTheme.textPrimary }}>
+                    Continue Chatting
+                  </h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
+                        Name
+                      </label>
+                      <input type="text" value={loginData.name} onChange={(e) => setLoginData({ ...loginData, name: e.target.value })} className="w-full px-4 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter your name" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
+                        Phone Number
+                      </label>
+                      <div className="flex gap-2">
+                        <select value={countryCode} onChange={(e) => setCountryCode(e.target.value)} className="px-3 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }}>
+                          <option value="+1">USA/Canada (+1)</option>
+                          <option value="+91">India (+91)</option>
+                          <option value="+44">UK (+44)</option>
+                          <option value="+61">Australia (+61)</option>
+                          <option value="+971">UAE (+971)</option>
+                        </select>
+                        <input type="tel" inputMode="tel" value={nationalNumber} onChange={(e) => setNationalNumber(e.target.value.replace(/\D/g, ''))} onBlur={() => { if (loginData.name && nationalNumber && !otpRequested) { handleRequestOtp(); } }} className="flex-1 px-4 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter your number" />
+                      </div>
+                    </div>
+                    {showOtpInput && (
+                      <div>
+                        <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
+                          OTP
+                        </label>
+                        <input type="text" inputMode="numeric" maxLength={6} value={loginData.otp} onChange={(e) => setLoginData({ ...loginData, otp: e.target.value.replace(/\D/g, '') })} className="w-full px-4 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter 6-digit OTP" />
+                        <p className="text-xs mt-2" style={{ color: currentTheme.textSecondary }}>{(() => { const p = normalizePhoneE164(nationalNumber, countryCode); return `OTP sent to ${p || ''}. ${isRequestingOtp ? 'Sending…' : otpRequested ? 'Didn\'t get it? Re-enter phone to resend.' : ''}`; })()}</p>
+                      </div>
+                    )}
+                    {loginError && (<div className="text-sm bg-red-500/10 border border-red-500/30 text-red-300 px-3 py-2 rounded-lg">{loginError}</div>)}
+                    <button onClick={showOtpInput ? handleLogin : handleRequestOtp} disabled={showOtpInput ? !(loginData.otp && loginData.otp.length >= 4) : !(loginData.name && nationalNumber) || isRequestingOtp} className="w-full py-2.5 rounded-xl text-sm font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed" style={{ backgroundColor: currentTheme.accentPrimary, color: '#ffffff', boxShadow: currentTheme.glow }}>
+                      {showOtpInput ? 'Verify & Continue' : (isRequestingOtp ? 'Sending OTP…' : 'Request OTP')}
+                    </button>
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-center mt-2" style={{ color: currentTheme.textTertiary }}>
+                {showLogin ? "Login to continue the conversation and access all features." : "Genie can make mistakes. Consider checking important information."}
+              </p>
+            </div>
           </div>
         </div>
       </div>

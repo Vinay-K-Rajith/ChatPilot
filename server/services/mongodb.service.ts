@@ -52,7 +52,25 @@ type MongoDBCollections = {
   gmt_cust?: Collection<GMTCustomer>;
   gmt_otp?: Collection<OTPRecord>;
   whatsappTemplates?: Collection<WhatsAppTemplate>;
+  trainingProgress?: Collection<TrainingProgress>;
 };
+
+// Training Progress interface
+export interface TrainingProgress {
+  _id?: ObjectId;
+  phone: string;
+  completedSections: number[]; // Array of s_no that are completed
+  currentSection: number; // Current s_no user is on
+  sectionChats: {
+    [key: number]: Array<{ // key is s_no
+      role: 'user' | 'assistant';
+      content: string;
+      timestamp: Date;
+    }>;
+  };
+  lastUpdated: Date;
+  createdAt: Date;
+}
 
 // Define interfaces for our data models
 export interface Customer {
@@ -151,7 +169,8 @@ export class MongoDBService {
         campaigns: db.collection<ServerCampaign>('Campaigns'),
         gmt_cust: db.collection<GMTCustomer>('GMT_Cust'),
         gmt_otp: db.collection<OTPRecord>('GMT_OTP'),
-        whatsappTemplates: db.collection<WhatsAppTemplate>('WhatsApp_Templates')
+        whatsappTemplates: db.collection<WhatsAppTemplate>('WhatsApp_Templates'),
+        trainingProgress: db.collection<TrainingProgress>('Training_Progress')
       };
 
       // Create indexes for chat history
@@ -206,6 +225,10 @@ export class MongoDBService {
       // Create indexes for WhatsApp Templates
       await this.collections.whatsappTemplates?.createIndex({ contentSid: 1 }, { unique: true });
       await this.collections.whatsappTemplates?.createIndex({ createdAt: -1 });
+
+      // Create indexes for Training Progress
+      await this.collections.trainingProgress?.createIndex({ phone: 1 }, { unique: true });
+      await this.collections.trainingProgress?.createIndex({ lastUpdated: -1 });
 
       this.isConnected = true;
       console.log('Connected to MongoDB');
@@ -562,6 +585,16 @@ await this.collections.leads.updateOne(
     return { ...lead, _id: (lead as any)._id?.toString() } as any;
   }
 
+  /** Get multiple leads by their string IDs */
+  public async getLeadsByIds(ids: string[]): Promise<any[]> {
+    await this.ensureConnected();
+    if (!this.collections.leads) throw new Error('Leads collection is not initialized');
+    if (!ids || ids.length === 0) return [];
+    const objectIds = ids.map(id => new ObjectId(id));
+    const items = await this.collections.leads.find({ _id: { $in: objectIds } } as any).toArray();
+    return items.map(i => ({ ...(i as any), _id: (i as any)._id?.toString() }));
+  }
+
   public async createLead(leadData: Omit<Lead, '_id' | 'createdAt' | 'updatedAt'>): Promise<any> {
     await this.ensureConnected();
     if (!this.collections.leads) throw new Error('Leads collection is not initialized');
@@ -767,7 +800,9 @@ const now = new Date();
       type: (campaignData as any).type,
       status: 'draft',
       template: (campaignData as any).template,
+      templateContentSid: (campaignData as any).templateContentSid,
       variables: (campaignData as any).variables,
+      variableBindings: (campaignData as any).variableBindings,
       mediaUrl: (campaignData as any).mediaUrl,
       mediaType: (campaignData as any).mediaType,
       leadIds: (campaignData as any).leadIds,
@@ -961,6 +996,188 @@ const now = new Date();
 
   public async setAwaitingName(phoneNumber: string, awaiting: boolean): Promise<void> {
     await this.setChatMetadataFields(phoneNumber, { awaitingName: awaiting });
+  }
+
+  // ============== Training Progress Methods ==============
+  
+  /**
+   * Get training sections from Training_KB collection
+   */
+  public async getTrainingSections(): Promise<Array<{ _id: ObjectId; s_no: number; heading: string; content: string }>> {
+    await this.ensureConnected();
+    const db = this.client.db(this.dbName);
+    const collection = db.collection('Training_KB');
+    const sections = await collection.find({}).sort({ s_no: 1 }).toArray();
+    return sections.map(s => ({
+      _id: s._id,
+      s_no: s.s_no,
+      heading: s.heading,
+      content: s.content
+    }));
+  }
+
+  /**
+   * Get training progress for a user
+   */
+  public async getTrainingProgress(phone: string): Promise<TrainingProgress | null> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    const progress = await this.collections.trainingProgress.findOne({ phone });
+    return progress;
+  }
+
+  /**
+   * Initialize training progress for a new user
+   */
+  public async initializeTrainingProgress(phone: string): Promise<TrainingProgress> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    const now = new Date();
+    const progress: TrainingProgress = {
+      phone,
+      completedSections: [],
+      currentSection: 1, // Start at section 1
+      sectionChats: {},
+      lastUpdated: now,
+      createdAt: now
+    };
+    
+    await this.collections.trainingProgress.insertOne(progress as any);
+    return progress;
+  }
+
+  /**
+   * Get or create training progress for a user
+   */
+  public async getOrCreateTrainingProgress(phone: string): Promise<TrainingProgress> {
+    let progress = await this.getTrainingProgress(phone);
+    if (!progress) {
+      progress = await this.initializeTrainingProgress(phone);
+    }
+    return progress;
+  }
+
+  /**
+   * Add a message to a training section's chat history
+   */
+  public async addTrainingMessage(
+    phone: string,
+    sectionNo: number,
+    role: 'user' | 'assistant',
+    content: string
+  ): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    const message = {
+      role,
+      content,
+      timestamp: new Date()
+    };
+    
+    await this.collections.trainingProgress.updateOne(
+      { phone },
+      {
+        $push: { [`sectionChats.${sectionNo}`]: message } as any,
+        $set: { lastUpdated: new Date() }
+      },
+      { upsert: true }
+    );
+  }
+
+  /**
+   * Mark a training section as completed
+   */
+  public async markSectionCompleted(phone: string, sectionNo: number): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    await this.collections.trainingProgress.updateOne(
+      { phone },
+      {
+        $addToSet: { completedSections: sectionNo },
+        $set: { 
+          currentSection: sectionNo + 1,
+          lastUpdated: new Date()
+        }
+      }
+    );
+  }
+
+  /**
+   * Update current section (for navigation)
+   */
+  public async updateCurrentSection(phone: string, sectionNo: number): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    await this.collections.trainingProgress.updateOne(
+      { phone },
+      {
+        $set: { 
+          currentSection: sectionNo,
+          lastUpdated: new Date()
+        }
+      }
+    );
+  }
+
+  /**
+   * Create a new training section
+   */
+  public async createTrainingSection(data: { s_no: number; heading: string; content: string }): Promise<any> {
+    await this.ensureConnected();
+    const db = this.client.db(this.dbName);
+    const collection = db.collection('Training_KB');
+    
+    const result = await collection.insertOne({
+      s_no: data.s_no,
+      heading: data.heading,
+      content: data.content,
+      createdAt: new Date()
+    });
+    
+    return {
+      _id: result.insertedId.toString(),
+      ...data
+    };
+  }
+
+  /**
+   * Update a training section
+   */
+  public async updateTrainingSection(id: string, data: Partial<{ s_no: number; heading: string; content: string }>): Promise<any | null> {
+    await this.ensureConnected();
+    const db = this.client.db(this.dbName);
+    const collection = db.collection('Training_KB');
+    
+    const result = await collection.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: { ...data, updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    );
+    
+    if (!result) return null;
+    
+    return {
+      _id: result._id.toString(),
+      s_no: result.s_no,
+      heading: result.heading,
+      content: result.content
+    };
+  }
+
+  /**
+   * Delete a training section
+   */
+  public async deleteTrainingSection(id: string): Promise<boolean> {
+    await this.ensureConnected();
+    const db = this.client.db(this.dbName);
+    const collection = db.collection('Training_KB');
+    
+    const result = await collection.deleteOne({ _id: new ObjectId(id) });
+    return result.deletedCount === 1;
   }
 }
 

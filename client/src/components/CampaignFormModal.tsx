@@ -66,13 +66,16 @@ import { useLeadsByIds } from "@/hooks/useLeads";
 import type { Campaign, CreateCampaignData } from "../../../shared/models/campaign";
 import { extractVariables, processTemplate } from "../../../shared/models/campaign";
 import LeadSelector from "./LeadSelector";
+import { safeFetch } from "@/utils/api";
 
 // Form validation schema
 const campaignFormSchema = z.object({
   name: z.string().min(1, "Campaign name is required").max(100, "Name too long"),
   type: z.enum(["broadcast", "drip", "trigger"]),
-  template: z.string().min(1, "Message template is required"),
+  template: z.string().min(1, "Template preview is required"),
+  templateContentSid: z.string().min(1, "Please select an approved WhatsApp template"),
   variables: z.record(z.string()).default({}),
+  variableBindings: z.record(z.string()).default({}),
   mediaUrl: z.string().optional(),
   mediaType: z.enum(["image", "video", "document"]).optional(),
   leadIds: z.array(z.string()).default([]),
@@ -132,6 +135,8 @@ export default function CampaignFormModal({
   const [selectedLeads, setSelectedLeads] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [templates, setTemplates] = useState<Array<{ contentSid: string; name: string; friendlyName?: string; body?: string; variables?: Record<string,string>; status?: string; mediaUrl?: string }>>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
 
   // Mutations
   const createCampaignMutation = useCreateCampaign();
@@ -151,12 +156,32 @@ export default function CampaignFormModal({
       type: "broadcast",
       template: "",
       variables: {},
+      variableBindings: {},
       leadIds: [],
       scheduleType: "immediate",
       timezone: "UTC",
       createdBy: "user", // TODO: Get from auth context
     },
   });
+
+// Load approved WhatsApp templates when the modal opens
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTemplates() {
+      try {
+        setLoadingTemplates(true);
+        const res = await safeFetch<{ success: boolean; templates: any[] }>(`/api/whatsapp/templates`);
+        const approved = (res.templates || []).filter((t: any) => (t.status || '').toLowerCase() === 'approved');
+        if (!cancelled) setTemplates(approved);
+      } catch (e) {
+        console.error('Failed to fetch templates', e);
+      } finally {
+        if (!cancelled) setLoadingTemplates(false);
+      }
+    }
+    if (open) loadTemplates();
+    return () => { cancelled = true; };
+  }, [open]);
 
   // Load campaign data for editing
   useEffect(() => {
@@ -165,7 +190,9 @@ export default function CampaignFormModal({
         name: campaign.name,
         type: campaign.type,
         template: campaign.template,
+        templateContentSid: (campaign as any).templateContentSid || "",
         variables: campaign.variables || {},
+        variableBindings: (campaign as any).variableBindings || {},
         mediaUrl: campaign.mediaUrl,
         mediaType: campaign.mediaType,
         leadIds: campaign.leadIds || [],
@@ -212,7 +239,9 @@ export default function CampaignFormModal({
         name: "",
         type: "broadcast",
         template: "",
+        templateContentSid: "",
         variables: {},
+        variableBindings: {},
         leadIds: [],
         scheduleType: "immediate",
         timezone: "UTC",
@@ -228,6 +257,8 @@ export default function CampaignFormModal({
   // Extract and update template variables
   const template = form.watch("template");
   const variables = form.watch("variables");
+  const variableBindings = form.watch("variableBindings");
+  const templateContentSid = form.watch("templateContentSid");
   
   useEffect(() => {
     if (template) {
@@ -241,6 +272,14 @@ export default function CampaignFormModal({
       
       if (JSON.stringify(newVars) !== JSON.stringify(currentVars)) {
         form.setValue("variables", newVars);
+      }
+      
+      // Initialize bindings for any new variables (default empty)
+      const currBindings = variableBindings || {};
+      const nextBindings: Record<string,string> = { ...currBindings };
+      extractedVars.forEach(v => { if (!(v in nextBindings)) nextBindings[v] = currBindings[v] || ""; });
+      if (JSON.stringify(nextBindings) !== JSON.stringify(currBindings)) {
+        form.setValue("variableBindings", nextBindings);
       }
     }
   }, [template, variables, form]);
@@ -479,34 +518,79 @@ export default function CampaignFormModal({
 
                 {/* Message Tab */}
                 <TabsContent value="message" className="space-y-4">
-                  <FormField
-                    control={form.control}
-                    name="template"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Message Template</FormLabel>
-                        <FormControl>
-                          <Textarea
-                            placeholder="Write your message here... Use {{variable}} for personalization."
-                            className="min-h-[150px]"
-                            {...field}
-                            ref={(e) => {
-                              if (textareaRef) {
-                                (textareaRef as any).current = e;
-                              }
-                              if (field.ref) field.ref(e);
-                            }}
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          Use variables like {TEMPLATE_VARIABLES.map(tv => `{{${tv.key}}}`).join(", ")} for personalization.
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="templateContentSid"
+                      render={({ field }) => (
+                        <FormItem className="md:col-span-1">
+                          <FormLabel>Approved WhatsApp Template</FormLabel>
+                          <Select value={field.value} onValueChange={(val) => {
+                            field.onChange(val);
+                            const t = templates.find(x => x.contentSid === val);
+                            if (t) {
+                              form.setValue('template', t.body || '');
+                              const vars = t.variables || {};
+                              const extracted = extractVariables(t.body || '');
+                              const merged: Record<string,string> = {};
+                              extracted.forEach(k => { merged[k] = (vars as any)[k] || getDefaultValue(k); });
+                              form.setValue('variables', merged);
+                              // initialize empty bindings for extracted keys
+                              const bindingsInit: Record<string,string> = {};
+                              extracted.forEach(k => { bindingsInit[k] = ((form.getValues('variableBindings') || {}) as any)[k] || ""; });
+                              form.setValue('variableBindings', bindingsInit);
+                              if (t.mediaUrl) form.setValue('mediaUrl', t.mediaUrl);
+                            }
+                          }}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder={loadingTemplates ? 'Loading templates...' : 'Select approved template'} />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {templates.map((t) => (
+                                <SelectItem key={t.contentSid} value={t.contentSid}>
+                                  {(t.friendlyName || t.name)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            Only approved templates can be used for campaigns.
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
-                  {/* Variable insertion buttons */}
+                    <FormField
+                      control={form.control}
+                      name="template"
+                      render={({ field }) => (
+                        <FormItem className="md:col-span-2">
+                          <FormLabel>Template Preview</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              placeholder="Select a template to see the preview"
+                              className="min-h-[150px]"
+                              {...field}
+                              readOnly
+                              ref={(e) => {
+                                if (textareaRef) {
+                                  (textareaRef as any).current = e;
+                                }
+                                if (field.ref) field.ref(e);
+                              }}
+                            />
+                          </FormControl>
+                          <FormDescription>Variables will be filled from lead data. Adjust sample values below for preview.</FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  {/* Quick Insert Variables */}
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Quick Insert Variables:</label>
                     <div className="flex flex-wrap gap-2">
@@ -531,25 +615,43 @@ export default function CampaignFormModal({
                       <CardHeader>
                         <CardTitle className="text-base">Variable Values</CardTitle>
                         <CardDescription>
-                          Set sample values for preview (actual values will come from lead data)
+                          Sample values for preview (actual send uses each lead's details)
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-3">
                         {Object.entries(variables || {}).map(([key, value]) => (
-                          <div key={key} className="flex items-center gap-3">
-                            <Badge variant="outline" className="min-w-[80px]">
-                              {key}
-                            </Badge>
-                            <Input
-                              value={value}
-                              onChange={(e) => {
-                                const newVars = { ...variables };
-                                newVars[key] = e.target.value;
-                                form.setValue("variables", newVars);
-                              }}
-                              placeholder={`Sample ${key}`}
-                              className="flex-1"
-                            />
+                          <div key={key} className="grid grid-cols-1 md:grid-cols-3 items-center gap-3">
+                            <div className="flex items-center gap-3 md:col-span-1">
+                              <Badge variant="outline" className="min-w-[80px]">{`{{${key}}}`}</Badge>
+                              <Input
+                                value={value}
+                                onChange={(e) => {
+                                  const newVars = { ...(variables || {}) } as Record<string,string>;
+                                  newVars[key] = e.target.value;
+                                  form.setValue('variables', newVars);
+                                }}
+                                placeholder={`Sample for {{${key}}}`}
+                                className="flex-1"
+                              />
+                            </div>
+                            <div className="md:col-span-2">
+                              <div className="text-xs text-muted-foreground mb-1">Bind to lead field</div>
+                              <Select value={(variableBindings || {})[key] || ""} onValueChange={(val) => {
+                                const next = { ...(variableBindings || {}) } as Record<string,string>;
+                                next[key] = val;
+                                form.setValue('variableBindings', next);
+                              }}>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select lead field" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="name">Lead Name</SelectItem>
+                                  <SelectItem value="email">Email Address</SelectItem>
+                                  <SelectItem value="phone">Phone Number</SelectItem>
+                                  <SelectItem value="company">Company Name</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
                           </div>
                         ))}
                       </CardContent>

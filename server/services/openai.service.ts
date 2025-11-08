@@ -36,6 +36,7 @@ export class OpenAIService {
    * @param knowledgeBaseContext Optional context from the knowledge base
    * @param systemPrompt Optional system prompt override
    * @param pdfContext Optional context from PDF documents
+   * @param userName Optional user's name to personalize the conversation
    * @returns The AI-generated response
    */
   public async generateResponse(
@@ -43,7 +44,8 @@ export class OpenAIService {
     conversationHistory: Array<{ role: string; content: string }> = [],
     knowledgeBaseContext?: string,
     systemPrompt?: string,
-    pdfContext?: string
+    pdfContext?: string,
+    userName?: string
   ): Promise<string> {
     try {
       // Define the core topic scope
@@ -53,7 +55,12 @@ export class OpenAIService {
       const conversationSummary = this.createConversationSummary(conversationHistory);
       
   // Base system rules enforced by the server
-  const baseSystemMessage = `You are Global Metal Direct's AI assistant (GMD). You have high emotional intelligence—respond with an empathetic, professional tone while staying concise. You are an AI assistant specializing EXCLUSIVELY in ${coreTopic}. 
+  const userNameContext = userName && /^[A-Za-z][A-Za-z'\- ]{1,40}$/.test(userName) 
+    ? `The user's name is ${userName}. Use their name naturally in your responses when appropriate to create a personalized, warm conversation. Don't overuse it—maybe once or twice per conversation in a natural way.` 
+    : '';
+  
+  const baseSystemMessage = `You are Global Metal Direct's AI assistant (GMD). You have high emotional intelligence—respond with an empathetic, professional tone while staying concise. You are an AI assistant specializing EXCLUSIVELY in ${coreTopic}.
+${userNameContext ? `\n${userNameContext}\n` : ''}
 
 STRICT BEHAVIOR RULES:
 1. ONLY answer questions related to industrial metal products, services, pricing, specifications, technical support, orders, and industry standards
@@ -235,6 +242,66 @@ Respond with ONLY a single number between 1-100. No explanation.`;
     } catch (error) {
       console.error('Error calculating engagement score:', error);
       return 50; // Default placeholder on error
+    }
+  }
+
+  /**
+   * Generate a response for training section chat
+   * @param message The user's message
+   * @param sectionHeading The heading/title of the training section
+   * @param sectionContent The content of the training section
+   * @param conversationHistory Previous messages in this section
+   * @param userName Optional user's name to personalize the training experience
+   * @returns The AI-generated response focused on the training material
+   */
+  public async generateTrainingResponse(
+    message: string,
+    sectionHeading: string,
+    sectionContent: string,
+    conversationHistory: Array<{ role: string; content: string }> = [],
+    userName?: string
+  ): Promise<string> {
+    try {
+      const userNameContext = userName && /^[A-Za-z][A-Za-z'\- ]{1,40}$/.test(userName) 
+        ? `\n\nThe user's name is ${userName}. Address them by name naturally when appropriate to create a warm, personalized learning experience.` 
+        : '';
+      
+      const systemMessage = `You are GMD Genie, an AI training assistant for Global Metal Direct. You are helping the user learn about: "${sectionHeading}"${userNameContext}
+
+TRAINING MATERIAL:
+${sectionContent}
+
+Your role is to:
+1. Help the user understand the training material
+2. Answer questions specifically about this section's content
+3. Provide clarifications and examples related to the topic
+4. Test understanding by asking relevant questions
+5. Keep responses focused on this training section
+6. Be encouraging and supportive
+
+If the user asks something outside this training section, politely redirect them to focus on the current material.
+Be conversational, clear, and educational.`;
+
+      const messages: ChatCompletionMessageParam[] = [
+        { role: 'system', content: systemMessage },
+        ...conversationHistory.map(msg => ({
+          role: msg.role as 'system' | 'user' | 'assistant',
+          content: msg.content
+        })),
+        { role: 'user', content: message }
+      ];
+
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages,
+        max_tokens: 500,
+        temperature: 0.7
+      });
+
+      return response.choices[0]?.message.content?.trim() || "I'm not sure how to respond to that.";
+    } catch (error) {
+      console.error('Error generating training response:', error);
+      return "Sorry, I encountered an error while processing your question.";
     }
   }
 

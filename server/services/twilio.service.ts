@@ -80,6 +80,33 @@ const cc = (process.env.DEFAULT_COUNTRY_CODE || '1').replace(/\D/g, '');
     }
   }
 
+  /**
+   * Send an approved WhatsApp template using Twilio Content API.
+   * Uses contentSid with optional contentVariables for personalization.
+   * Always sends via WhatsApp channel.
+   */
+  public async sendContentMessage(to: string, contentSid: string, variables?: Record<string, any>): Promise<boolean> {
+    try {
+      const fromAddr = this.phoneNumber.startsWith('whatsapp:') ? this.phoneNumber : `whatsapp:${this.phoneNumber}`;
+      const toAddr = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
+      const payload: any = {
+        from: fromAddr,
+        to: toAddr,
+        contentSid,
+      };
+      if (variables && Object.keys(variables).length > 0) {
+        payload.contentVariables = JSON.stringify(variables);
+      }
+      console.log('[twilio] sending content message', { to: toAddr, contentSid, variables });
+      const result = await (this.client as any).messages.create(payload);
+      console.log(`WhatsApp template message sent. SID: ${result.sid}`);
+      return true;
+    } catch (error: any) {
+      console.error('Error sending WhatsApp content message:', { to, contentSid, error: error?.message || error });
+      return false;
+    }
+  }
+
   public async sendSms(to: string, message: string): Promise<boolean> {
     try {
       const fromNumber = this.phoneNumber.replace(/^whatsapp:/, '');
@@ -139,11 +166,20 @@ const cc = (process.env.DEFAULT_COUNTRY_CODE || '1').replace(/\D/g, '');
         // Get relevant knowledge base context
         const knowledgeContext = await this.mongodbService.getRelevantKnowledge(message);
 
-        // Generate AI response
+        // Get user's name from leads table for personalization
+        const updatedLead = await this.mongodbService.getLeadByPhone(e164);
+        const userName = updatedLead?.name && typeof updatedLead.name === 'string' && /^[A-Za-z][A-Za-z'\- ]{1,40}$/.test(updatedLead.name) 
+          ? updatedLead.name 
+          : undefined;
+
+        // Generate AI response with user's name for personalization
         const aiResponse = await this.openaiService.generateResponse(
           message,
           conversationHistory.map(m => ({ role: m.role, content: m.content })),
-          knowledgeContext
+          knowledgeContext,
+          undefined, // systemPrompt
+          undefined, // pdfContext
+          userName   // userName for personalization
         );
 
         // Store AI response in chat history
