@@ -29,26 +29,34 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 
   useEffect(() => {
     let isActive = true;
+    let checkInProgress = false;
 
     async function checkSession() {
-      if (!isActive) return;
+      if (!isActive || checkInProgress) return;
+      checkInProgress = true;
 
-      if (!isAuthed()) {
-        setIsValidSession(false);
+      try {
+        if (!isActive) return;
+
+        if (!isAuthed()) {
+          setIsValidSession(false);
+          setIsLoading(false);
+          return;
+        }
+
+        const isValid = await validateSession();
+        if (!isActive) return;
+
+        setIsValidSession(isValid);
         setIsLoading(false);
-        return;
-      }
 
-      const isValid = await validateSession();
-      if (!isActive) return;
-
-      setIsValidSession(isValid);
-      setIsLoading(false);
-
-      // If session is invalid, clear auth and redirect
-      if (!isValid) {
-        localStorage.removeItem("auth");
-        localStorage.removeItem("token");
+        // If session is invalid, clear auth and redirect
+        if (!isValid) {
+          localStorage.removeItem("auth");
+          localStorage.removeItem("token");
+        }
+      } finally {
+        checkInProgress = false;
       }
     }
 
@@ -92,7 +100,7 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 
     // Periodic session check every 30 seconds
     const interval = setInterval(() => {
-      if (!document.hidden && isAuthed()) {
+      if (!document.hidden && isAuthed() && !checkInProgress) {
         checkSession();
       }
     }, 30000);

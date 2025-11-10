@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -6,12 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { User, Lock, MessageSquare } from "lucide-react";
+import { isAuthed } from "@/lib/auth";
 
 const HERO_IMAGE = "https://ideogram.ai/assets/image/lossless/response/nXGvC0ZRR_OgZR7hWbOn1Q";
-
-function isAuthed() {
-  return localStorage.getItem("auth") === "true";
-}
 
 export default function Login() {
   const [, navigate] = useLocation();
@@ -19,10 +16,16 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [rememberMe, setRememberMe] = useState(false);
+  const hasNavigated = useRef(false);
 
   useEffect(() => {
-    if (isAuthed()) {
-      navigate("/dashboard");
+    // Prevent navigation throttling by only navigating once
+    if (isAuthed() && !hasNavigated.current) {
+      hasNavigated.current = true;
+      // Use setTimeout to defer navigation to avoid blocking render
+      setTimeout(() => {
+        navigate("/dashboard");
+      }, 0);
     }
   }, [navigate]);
 
@@ -47,7 +50,12 @@ export default function Login() {
 
       localStorage.setItem("auth", "true");
       localStorage.setItem("token", data.token);
-      navigate("/dashboard");
+      
+      // Defer navigation to avoid blocking render
+      hasNavigated.current = true;
+      setTimeout(() => {
+        navigate("/dashboard");
+      }, 0);
     } catch (err: any) {
       setError(err.message || 'Failed to login');
     }
