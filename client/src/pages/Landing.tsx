@@ -563,7 +563,7 @@ await ensureLeadExists(loginData.name, computedPhone);
       <div className="flex-1 flex flex-col lg:flex-row" style={{ minHeight: 0 }}>
         {/* Sidebar - only when logged in */}
         {localStorage.getItem('auth') === 'true' && (
-          <div className="w-full lg:w-64 xl:w-72 border-b lg:border-b-0 lg:border-r flex-shrink-0 flex flex-col" style={{ backgroundColor: currentTheme.sidebarBg, borderColor: currentTheme.border, maxHeight: '40vh', height: 'auto', overflow: 'hidden' }} data-sidebar="true">
+          <div className="w-full lg:w-64 xl:w-72 border-b lg:border-b-0 lg:border-r flex-shrink-0 flex flex-col lg:sticky lg:top-0 lg:self-start lg:h-screen" style={{ backgroundColor: currentTheme.sidebarBg, borderColor: currentTheme.border }} data-sidebar="true">
             {/* Tabs */}
             <div className="p-2 sm:p-3 border-b" style={{ borderColor: currentTheme.border }}>
               <div className="flex gap-2">
