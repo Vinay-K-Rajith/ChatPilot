@@ -90,6 +90,7 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
   const [trainingMessages, setTrainingMessages] = useState<Message[]>([]);
   const [isTrainingTyping, setIsTrainingTyping] = useState(false);
   const [hasChatInSection, setHasChatInSection] = useState(false);
+  const [authChanged, setAuthChanged] = useState(0); // Trigger for auth state changes
 
   const suggestions = [
     'Analyze sales trends',
@@ -140,7 +141,10 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
   // Fetch previous chat for logged-in user
   useEffect(() => {
     const authed = localStorage.getItem('auth') === 'true';
-    if (!authed) return;
+    if (!authed) {
+      setPreviousChat(null);
+      return;
+    }
     try {
       const u = JSON.parse(localStorage.getItem('user') || '{}');
       if (!u?.phone) return;
@@ -153,26 +157,46 @@ const [loginData, setLoginData] = useState<LoginData>({ name: '', phone: '', otp
         })
         .catch(() => {});
     } catch {}
-  }, []);
+  }, [authChanged]);
 
   // Fetch training data for logged-in user
   useEffect(() => {
     const authed = localStorage.getItem('auth') === 'true';
-    if (!authed) return;
+    if (!authed) {
+      // Clear training data when logged out
+      setTrainingSections([]);
+      setTrainingProgress(null);
+      setSelectedSection(null);
+      return;
+    }
     let u: any = null;
     try { u = JSON.parse(localStorage.getItem('user') || 'null'); } catch {}
     if (!u?.phone) return;
 
+    // Fetch training sections
     fetch('/api/training/sections')
       .then(r => r.json())
-      .then(data => { if (data?.success) setTrainingSections(data.sections || []); })
-      .catch(() => {});
+      .then(data => { 
+        if (data?.success) {
+          setTrainingSections(data.sections || []);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch training sections:', err);
+      });
 
+    // Fetch training progress
     fetch(`/api/training/progress/${encodeURIComponent(u.phone)}`)
       .then(r => r.json())
-      .then(data => { if (data?.success) setTrainingProgress(data.progress); })
-      .catch(() => {});
-  }, []);
+      .then(data => { 
+        if (data?.success) {
+          setTrainingProgress(data.progress);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to fetch training progress:', err);
+      });
+  }, [authChanged]);
 
   // Auto-select first incomplete section when training tab is opened
   useEffect(() => {
@@ -439,6 +463,9 @@ await ensureLeadExists(loginData.name, computedPhone);
         localStorage.removeItem('usedMessages');
         setRemainingMessages(9999);
         setShowLogin(false);
+        
+        // Trigger training data fetch after successful login
+        setAuthChanged(prev => prev + 1);
       } else {
         const data = await response.json().catch(() => ({}));
         setLoginError((data && (data.error || data.message)) || 'Invalid OTP');
@@ -457,16 +484,16 @@ await ensureLeadExists(loginData.name, computedPhone);
 
       {/* Header */}
       <header className="border-b" style={{ borderColor: currentTheme.border, backgroundColor: currentTheme.surfaceBg }}>
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-5 h-5" style={{ color: currentTheme.textSecondary }} />
-              <h2 className="text-base md:text-lg font-extrabold tracking-tight gradient-text" style={{ color: currentTheme.textPrimary, fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <MessageSquare className="w-4 h-4 sm:w-5 sm:h-5" style={{ color: currentTheme.textSecondary }} />
+              <h2 className="text-sm sm:text-base md:text-lg font-extrabold tracking-tight gradient-text" style={{ color: currentTheme.textPrimary, fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
                 Genie
               </h2>
             </div>
           </div>
-          <div className="flex items-center gap-2 relative">
+          <div className="flex items-center gap-1.5 sm:gap-2 relative">
             {(() => {
               const authed = localStorage.getItem('auth') === 'true';
               let u: any = null;
@@ -476,15 +503,15 @@ await ensureLeadExists(loginData.name, computedPhone);
                 return (
                   <>
                     <button onClick={() => setShowUserPopup((v) => !v)} className="rounded-full focus:outline-none">
-                      <Avatar className="h-8 w-8">
-                        <AvatarFallback className="text-sm font-semibold">
+                      <Avatar className="h-7 w-7 sm:h-8 sm:w-8">
+                        <AvatarFallback className="text-xs sm:text-sm font-semibold">
                           {(u.name?.charAt(0) || 'U').toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                     </button>
                     {showUserPopup && (
-                      <div className="absolute right-0 top-12 w-56 rounded-lg border shadow-lg p-3" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border }}>
-                        <div className="text-sm font-semibold mb-1" style={{ color: currentTheme.textPrimary }}>
+                      <div className="absolute right-0 top-10 sm:top-12 w-48 sm:w-56 rounded-lg border shadow-lg p-2.5 sm:p-3 z-50" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border }}>
+                        <div className="text-xs sm:text-sm font-semibold mb-1" style={{ color: currentTheme.textPrimary }}>
                           {u.name || 'User'}
                         </div>
                         {u.phone ? (
@@ -500,7 +527,7 @@ await ensureLeadExists(loginData.name, computedPhone);
               return (
                 <button 
                   onClick={() => setShowLogin(true)}
-                  className="px-3 py-2 rounded-lg text-sm font-medium transition-all border hover-elevate"
+                  className="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all border hover-elevate"
                   style={{ 
                     color: currentTheme.textPrimary,
                     backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)',
@@ -513,7 +540,7 @@ await ensureLeadExists(loginData.name, computedPhone);
             })()}
             <button 
               onClick={() => setIsDark(!isDark)}
-              className="p-2 rounded-lg transition-all duration-200"
+              className="p-1.5 sm:p-2 rounded-lg transition-all duration-200"
               style={{ 
                 color: currentTheme.textSecondary,
                 backgroundColor: currentTheme.hoverBg
@@ -526,47 +553,47 @@ await ensureLeadExists(loginData.name, computedPhone);
                 e.currentTarget.style.backgroundColor = currentTheme.hoverBg;
                 e.currentTarget.style.color = currentTheme.textSecondary;
               }}>
-              {isDark ? <Sun className="w-5 h-5" strokeWidth={2.5} /> : <Moon className="w-5 h-5" strokeWidth={2.5} />}
+              {isDark ? <Sun className="w-4 h-4 sm:w-5 sm:h-5" strokeWidth={2.5} /> : <Moon className="w-4 h-4 sm:w-5 sm:h-5" strokeWidth={2.5} />}
             </button>
           </div>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex" style={{ minHeight: 0 }}>
+      <div className="flex-1 flex flex-col lg:flex-row" style={{ minHeight: 0 }}>
         {/* Sidebar - only when logged in */}
         {localStorage.getItem('auth') === 'true' && (
-          <div className="w-64 border-r flex-shrink-0 flex flex-col" style={{ backgroundColor: currentTheme.sidebarBg, borderColor: currentTheme.border, height: 'calc(100vh - 61px)' }}>
+          <div className="w-full lg:w-64 xl:w-72 border-b lg:border-b-0 lg:border-r flex-shrink-0 flex flex-col" style={{ backgroundColor: currentTheme.sidebarBg, borderColor: currentTheme.border, maxHeight: '40vh', height: 'auto', overflow: 'hidden' }} data-sidebar="true">
             {/* Tabs */}
-            <div className="p-3 border-b" style={{ borderColor: currentTheme.border }}>
+            <div className="p-2 sm:p-3 border-b" style={{ borderColor: currentTheme.border }}>
               <div className="flex gap-2">
                 <button 
                   onClick={() => setActiveTab('chat')} 
-                  className="flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all" 
+                  className="flex-1 px-2 sm:px-3 py-2 rounded-md text-xs sm:text-sm font-medium transition-all" 
                   style={{ 
                     backgroundColor: activeTab==='chat'?currentTheme.accentPrimary:'transparent', 
                     color: activeTab==='chat'?'#ffffff':currentTheme.textPrimary, 
                     border: `1px solid ${activeTab==='chat'?currentTheme.accentPrimary:currentTheme.border}` 
                   }}
                 >
-                  <MessageSquare className="w-4 h-4 inline mr-1" /> Chat
+                  <MessageSquare className="w-3 h-3 sm:w-4 sm:h-4 inline mr-1" /> <span className="hidden sm:inline">Chat</span><span className="sm:hidden">Chat</span>
                 </button>
                 <button 
                   onClick={() => setActiveTab('training')} 
-                  className="flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all" 
+                  className="flex-1 px-2 sm:px-3 py-2 rounded-md text-xs sm:text-sm font-medium transition-all" 
                   style={{ 
                     backgroundColor: activeTab==='training'?currentTheme.accentPrimary:'transparent', 
                     color: activeTab==='training'?'#ffffff':currentTheme.textPrimary, 
                     border: `1px solid ${activeTab==='training'?currentTheme.accentPrimary:currentTheme.border}` 
                   }}
                 >
-                  <BookOpen className="w-4 h-4 inline mr-1" /> Training
+                  <BookOpen className="w-3 h-3 sm:w-4 sm:h-4 inline mr-1" /> <span className="hidden sm:inline">Training</span><span className="sm:hidden">Train</span>
                 </button>
               </div>
             </div>
             
             {activeTab === 'training' ? (
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="flex-1 overflow-y-auto p-2 sm:p-3">
                 <div className="text-xs font-semibold mb-2 px-2" style={{ color: currentTheme.textTertiary }}>TRAINING SECTIONS</div>
                 {trainingSections.length > 0 ? trainingSections.map((s) => {
                   const isCompleted = !!trainingProgress?.completedSections?.includes(s.s_no);
@@ -576,7 +603,7 @@ await ensureLeadExists(loginData.name, computedPhone);
                     <button 
                       key={s.s_no} 
                       onClick={() => handleSectionSelect(s.s_no)} 
-                      className="w-full text-left px-3 py-2.5 rounded-lg flex items-start gap-2 mb-1 transition-all" 
+                      className="w-full text-left px-2 sm:px-3 py-2 sm:py-2.5 rounded-lg flex items-start gap-2 mb-1 transition-all" 
                       style={{ 
                         backgroundColor: isActive?currentTheme.hoverBg:'transparent', 
                         color: currentTheme.textPrimary,
@@ -584,8 +611,8 @@ await ensureLeadExists(loginData.name, computedPhone);
                         opacity: 1
                       }}
                     >
-                      {isCompleted ? <CheckCircle className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: '#10b981' }} /> : canChat ? <Circle className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: currentTheme.textTertiary }} />}
-                      <span className="text-sm font-medium" style={{ wordBreak: 'break-word' }}>{s.s_no}. {s.heading}</span>
+                      {isCompleted ? <CheckCircle className="w-3 h-3 sm:w-4 sm:h-4 mt-0.5 flex-shrink-0" style={{ color: '#10b981' }} /> : canChat ? <Circle className="w-3 h-3 sm:w-4 sm:h-4 mt-0.5 flex-shrink-0" /> : <Lock className="w-3 h-3 sm:w-4 sm:h-4 mt-0.5 flex-shrink-0" style={{ color: currentTheme.textTertiary }} />}
+                      <span className="text-xs sm:text-sm font-medium" style={{ wordBreak: 'break-word', lineHeight: '1.4' }}>{s.s_no}. {s.heading}</span>
                     </button>
                   );
                 }) : (
@@ -593,8 +620,8 @@ await ensureLeadExists(loginData.name, computedPhone);
                 )}
               </div>
             ) : (
-              <div className="flex-1 p-4">
-                <div className="text-sm" style={{ color: currentTheme.textSecondary }}>Switch to Training tab to view sections</div>
+              <div className="flex-1 p-3 sm:p-4 hidden lg:block">
+                <div className="text-xs sm:text-sm" style={{ color: currentTheme.textSecondary }}>Switch to Training tab to view sections</div>
               </div>
             )}
           </div>
@@ -603,21 +630,21 @@ await ensureLeadExists(loginData.name, computedPhone);
         {/* Main content panel */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-y-auto">
-            <div className="max-w-4xl mx-auto px-4 py-6">
+            <div className="max-w-4xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6">
               {activeTab === 'chat' ? (
                 <>
                   {/* Hero (stays mounted and fades out when chat starts) */}
-                  <section className={[ 'flex items-center justify-center pt-16 md:pt-24 transition-all duration-500', hasChatted ? 'opacity-0 translate-y-[-16px] h-0 py-0 mb-0 overflow-hidden' : 'min-h-[30vh] opacity-100' ].join(' ')}>
-                    <div className="w-full text-center">
-                      <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight gradient-text" style={{ fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
+                  <section className={[ 'flex items-center justify-center pt-8 sm:pt-16 md:pt-24 transition-all duration-500', hasChatted ? 'opacity-0 translate-y-[-16px] h-0 py-0 mb-0 overflow-hidden' : 'min-h-[20vh] sm:min-h-[30vh] opacity-100' ].join(' ')}>
+                    <div className="w-full text-center px-4">
+                      <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-extrabold tracking-tight gradient-text" style={{ fontFamily: "'Space Grotesk', Inter, sans-serif" }}>
                         GMD Genie
                       </h1>
-                      <p className="mt-2 text-sm md:text-base" style={{ color: currentTheme.textSecondary }}>
+                      <p className="mt-2 text-xs sm:text-sm md:text-base" style={{ color: currentTheme.textSecondary }}>
                         Your AI assistant for professional customer conversations and insights.
                       </p>
                       {localStorage.getItem('auth') === 'true' && previousChat?.messages?.length ? (
                         <div className="mt-4 flex items-center justify-center">
-                          <button onClick={() => { const baseId = messages.length + 1; const converted = previousChat!.messages.map((m, idx) => ({ id: baseId + idx, type: m.role === 'assistant' ? 'bot' : 'user', text: m.content } as Message)); setMessages(prev => prev.length > 1 ? prev : [prev[0], ...converted]); setHasChatted(true); }} className="px-4 py-2 rounded-lg text-sm font-medium transition-all border hover-elevate" style={{ color: currentTheme.textPrimary, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)', borderColor: currentTheme.border }}>Continue previous conversation</button>
+                          <button onClick={() => { const baseId = messages.length + 1; const converted = previousChat!.messages.map((m, idx) => ({ id: baseId + idx, type: m.role === 'assistant' ? 'bot' : 'user', text: m.content } as Message)); setMessages(prev => prev.length > 1 ? prev : [prev[0], ...converted]); setHasChatted(true); }} className="px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all border hover-elevate" style={{ color: currentTheme.textPrimary, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.6)', borderColor: currentTheme.border }}>Continue previous conversation</button>
                         </div>
                       ) : null}
                     </div>
@@ -626,16 +653,16 @@ await ensureLeadExists(loginData.name, computedPhone);
                   {messages.length > 0 && (
                     <>
                       {messages.map((message) => (
-                        <div key={message.id} className="mb-6">
-                          <div className="flex gap-3">
-                            <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: message.type === 'bot' ? currentTheme.accentPrimary : currentTheme.hoverBg }}>
-                              {message.type === 'bot' ? (<Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />) : (<User className="w-4 h-4" style={{ color: currentTheme.textPrimary }} strokeWidth={2.5} />)}
+                        <div key={message.id} className="mb-4 sm:mb-6">
+                          <div className="flex gap-2 sm:gap-3">
+                            <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: message.type === 'bot' ? currentTheme.accentPrimary : currentTheme.hoverBg }}>
+                              {message.type === 'bot' ? (<Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />) : (<User className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: currentTheme.textPrimary }} strokeWidth={2.5} />)}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="font-semibold text-sm mb-1" style={{ color: currentTheme.textPrimary }}>
+                              <div className="font-semibold text-xs sm:text-sm mb-1" style={{ color: currentTheme.textPrimary }}>
                                 {message.type === 'bot' ? 'Global Metal Direct' : 'You'}
                               </div>
-                              <div className="text-sm leading-relaxed" style={{ color: currentTheme.textPrimary }}>
+                              <div className="text-xs sm:text-sm leading-relaxed" style={{ color: currentTheme.textPrimary }}>
                                 {message.type === 'bot' ? (message.animated ? (<TypingMarkdown text={message.text} invert={isDark} speed={24} onDone={() => { setMessages(prev => prev.map(m => m.id === message.id ? { ...m, animated: false } : m)); }} />) : (<MarkdownRenderer text={message.text} invert={isDark} />)) : (<MarkdownRenderer text={message.text} invert={isDark} />)}
                               </div>
                             </div>
@@ -644,19 +671,19 @@ await ensureLeadExists(loginData.name, computedPhone);
                       ))}
 
                       {isTyping && (
-                        <div className="mb-6">
-                          <div className="flex gap-3">
-                            <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
-                              <Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />
+                        <div className="mb-4 sm:mb-6">
+                          <div className="flex gap-2 sm:gap-3">
+                            <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
+                              <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="font-semibold text-sm mb-2" style={{ color: currentTheme.textPrimary }}>
+                              <div className="font-semibold text-xs sm:text-sm mb-2" style={{ color: currentTheme.textPrimary }}>
                                 Global Metal Direct
                               </div>
                               <div className="flex gap-1.5">
-                                <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '0ms' }}></div>
-                                <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '150ms' }}></div>
-                                <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '300ms' }}></div>
+                                <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '0ms' }}></div>
+                                <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '150ms' }}></div>
+                                <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '300ms' }}></div>
                               </div>
                             </div>
                           </div>
@@ -671,28 +698,28 @@ await ensureLeadExists(loginData.name, computedPhone);
                 // Training tab content
                 <>
                   {selectedSection && trainingSections.find(s => s.s_no === selectedSection) ? (
-                    <div className="mb-6">
-                      <div className="flex items-start justify-between gap-4 mb-3">
-                        <h2 className="text-xl md:text-2xl font-bold" style={{ color: currentTheme.textPrimary }}>
+                    <div className="mb-4 sm:mb-6">
+                      <div className="flex flex-col sm:flex-row items-start justify-between gap-2 sm:gap-4 mb-3">
+                        <h2 className="text-lg sm:text-xl md:text-2xl font-bold" style={{ color: currentTheme.textPrimary, lineHeight: '1.3' }}>
                           {trainingSections.find(s => s.s_no === selectedSection)!.heading}
                         </h2>
                         {(trainingProgress?.completedSections || []).includes(selectedSection) && (
-                          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
-                            <CheckCircle className="w-3.5 h-3.5" />
+                          <div className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full text-xs font-medium flex-shrink-0" style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                            <CheckCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
                             <span>Completed</span>
                           </div>
                         )}
                       </div>
-                      <div className="p-4 rounded-lg mb-4" style={{ backgroundColor: currentTheme.surfaceBg, border: `1px solid ${currentTheme.border}` }}>
+                      <div className="p-3 sm:p-4 md:p-5 rounded-lg mb-4 training-content-box" style={{ backgroundColor: currentTheme.surfaceBg, border: `1px solid ${currentTheme.border}`, maxHeight: '60vh', overflowY: 'auto' }}>
                         <MarkdownRenderer text={trainingSections.find(s => s.s_no === selectedSection)!.content} invert={isDark} />
                       </div>
                       {!canChatWithSection(selectedSection) ? (
-                        <div className="px-4 py-3 rounded-lg flex items-start gap-3 mb-4" style={{ backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.1)', border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.3)'}` }}>
+                        <div className="px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg flex items-start gap-2 sm:gap-3 mb-4" style={{ backgroundColor: isDark ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.1)', border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : 'rgba(239, 68, 68, 0.3)'}` }}>
                           <div className="flex-shrink-0 mt-0.5">
-                            <Lock className="w-5 h-5" style={{ color: '#ef4444' }} />
+                            <Lock className="w-4 h-4 sm:w-5 sm:h-5" style={{ color: '#ef4444' }} />
                           </div>
                           <div>
-                            <p className="text-sm font-medium mb-1" style={{ color: currentTheme.textPrimary }}>
+                            <p className="text-xs sm:text-sm font-medium mb-1" style={{ color: currentTheme.textPrimary }}>
                               Section Locked
                             </p>
                             <p className="text-xs" style={{ color: currentTheme.textSecondary }}>
@@ -701,14 +728,14 @@ await ensureLeadExists(loginData.name, computedPhone);
                           </div>
                         </div>
                       ) : !(trainingProgress?.completedSections || []).includes(selectedSection) && (
-                        <div className="px-4 py-3 rounded-lg flex items-start gap-3 mb-4" style={{ backgroundColor: isDark ? 'rgba(107, 133, 153, 0.1)' : 'rgba(100, 116, 139, 0.1)', border: `1px solid ${currentTheme.border}` }}>
+                        <div className="px-3 sm:px-4 py-2.5 sm:py-3 rounded-lg flex items-start gap-2 sm:gap-3 mb-4" style={{ backgroundColor: isDark ? 'rgba(107, 133, 153, 0.1)' : 'rgba(100, 116, 139, 0.1)', border: `1px solid ${currentTheme.border}` }}>
                           <div className="flex-shrink-0 mt-0.5">
-                            <div className="w-5 h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
+                            <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
                               <span className="text-white text-xs font-bold">!</span>
                             </div>
                           </div>
                           <div>
-                            <p className="text-sm font-medium mb-1" style={{ color: currentTheme.textPrimary }}>
+                            <p className="text-xs sm:text-sm font-medium mb-1" style={{ color: currentTheme.textPrimary }}>
                               Start chatting to complete this section
                             </p>
                             <p className="text-xs" style={{ color: currentTheme.textSecondary }}>
@@ -721,16 +748,16 @@ await ensureLeadExists(loginData.name, computedPhone);
                   ) : null}
 
                   {trainingMessages.map((message) => (
-                    <div key={message.id} className="mb-6">
-                      <div className="flex gap-3">
-                        <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: message.type === 'bot' ? currentTheme.accentPrimary : currentTheme.hoverBg }}>
-                          {message.type === 'bot' ? (<Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />) : (<User className="w-4 h-4" style={{ color: currentTheme.textPrimary }} strokeWidth={2.5} />)}
+                    <div key={message.id} className="mb-4 sm:mb-6">
+                      <div className="flex gap-2 sm:gap-3">
+                        <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: message.type === 'bot' ? currentTheme.accentPrimary : currentTheme.hoverBg }}>
+                          {message.type === 'bot' ? (<Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />) : (<User className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: currentTheme.textPrimary }} strokeWidth={2.5} />)}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-sm mb-1" style={{ color: currentTheme.textPrimary }}>
+                          <div className="font-semibold text-xs sm:text-sm mb-1" style={{ color: currentTheme.textPrimary }}>
                             {message.type === 'bot' ? 'GMD Genie' : 'You'}
                           </div>
-                          <div className="text-sm leading-relaxed" style={{ color: currentTheme.textPrimary }}>
+                          <div className="text-xs sm:text-sm leading-relaxed" style={{ color: currentTheme.textPrimary }}>
                             {message.type === 'bot' ? (message.animated ? (<TypingMarkdown text={message.text} invert={isDark} speed={24} onDone={() => { setTrainingMessages(prev => prev.map(m => m.id === message.id ? { ...m, animated: false } : m)); }} />) : (<MarkdownRenderer text={message.text} invert={isDark} />)) : (<MarkdownRenderer text={message.text} invert={isDark} />)}
                           </div>
                         </div>
@@ -739,19 +766,19 @@ await ensureLeadExists(loginData.name, computedPhone);
                   ))}
 
                   {isTrainingTyping && (
-                    <div className="mb-6">
-                      <div className="flex gap-3">
-                        <div className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
-                          <Bot className="w-4 h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />
+                    <div className="mb-4 sm:mb-6">
+                      <div className="flex gap-2 sm:gap-3">
+                        <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: currentTheme.accentPrimary }}>
+                          <Bot className="w-3.5 h-3.5 sm:w-4 sm:h-4" style={{ color: '#ffffff' }} strokeWidth={2.5} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-sm mb-2" style={{ color: currentTheme.textPrimary }}>
+                          <div className="font-semibold text-xs sm:text-sm mb-2" style={{ color: currentTheme.textPrimary }}>
                             GMD Genie
                           </div>
                           <div className="flex gap-1.5">
-                            <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '0ms' }}></div>
-                            <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '150ms' }}></div>
-                            <div className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '300ms' }}></div>
+                            <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '0ms' }}></div>
+                            <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '150ms' }}></div>
+                            <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-bounce" style={{ backgroundColor: currentTheme.accentPrimary, animationDelay: '300ms' }}></div>
                           </div>
                         </div>
                       </div>
@@ -766,19 +793,19 @@ await ensureLeadExists(loginData.name, computedPhone);
 
           {/* Input Area */}
           <div className="border-t" style={{ borderColor: currentTheme.border, backgroundColor: currentTheme.surfaceBg }}>
-            <div className="max-w-3xl mx-auto px-4 py-4">
+            <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
               {!showLogin ? (
                 <>
                   {activeTab === 'chat' && (
-                    <div className="mb-2 flex flex-wrap gap-2">
+                    <div className="mb-2 flex flex-wrap gap-1.5 sm:gap-2">
                       {['What can you do?','Summarize my last chat','Create a follow-up reply'].map((p, i) => (
-                        <button key={i} onClick={() => handleSuggestion(p)} className="px-3 py-1.5 rounded-lg text-xs border hover-elevate transition" style={{ backgroundColor: currentTheme.surfaceBg, color: currentTheme.textSecondary, borderColor: currentTheme.border }}>
+                        <button key={i} onClick={() => handleSuggestion(p)} className="px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs border hover-elevate transition whitespace-nowrap" style={{ backgroundColor: currentTheme.surfaceBg, color: currentTheme.textSecondary, borderColor: currentTheme.border }}>
                           {p}
                         </button>
                       ))}
                     </div>
                   )}
-                  <div className="relative flex items-end gap-2 rounded-2xl border transition-all" style={{ backgroundColor: currentTheme.inputBg, borderColor: currentTheme.border }}>
+                  <div className="relative flex items-end gap-1.5 sm:gap-2 rounded-xl sm:rounded-2xl border transition-all" style={{ backgroundColor: currentTheme.inputBg, borderColor: currentTheme.border }}>
                     <textarea
                       ref={textareaRef}
                       value={input}
@@ -787,52 +814,52 @@ await ensureLeadExists(loginData.name, computedPhone);
                       placeholder={activeTab === 'training' ? (selectedSection == null ? 'Select a section first' : !canChatWithSection(selectedSection) ? 'Complete previous sections to unlock chat' : 'Ask about this section...') : (remainingMessages > 0 ? 'Message Genie...' : 'Please login to continue chatting')}
                       disabled={activeTab === 'training' ? (selectedSection == null || !canChatWithSection(selectedSection)) : remainingMessages <= 0}
                       rows={1}
-                      className="flex-1 px-4 py-3 bg-transparent resize-none focus:outline-none text-sm"
-                      style={{ color: currentTheme.textPrimary, maxHeight: '150px', lineHeight: '1.5' }}
+                      className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 bg-transparent resize-none focus:outline-none text-xs sm:text-sm"
+                      style={{ color: currentTheme.textPrimary, maxHeight: '120px', lineHeight: '1.5' }}
                     />
-                    <button onClick={activeTab === 'training' ? handleTrainingSend : handleSend} disabled={!input.trim() || (activeTab === 'training' ? (selectedSection == null || !canChatWithSection(selectedSection)) : remainingMessages <= 0)} className="m-2 p-2.5 rounded-lg transition-all flex-shrink-0" style={{ backgroundColor: input.trim() && (activeTab === 'training' ? (selectedSection != null && canChatWithSection(selectedSection)) : remainingMessages > 0) ? currentTheme.accentPrimary : currentTheme.hoverBg, color: input.trim() && (activeTab === 'training' ? (selectedSection != null && canChatWithSection(selectedSection)) : remainingMessages > 0) ? '#ffffff' : currentTheme.textTertiary }}>
-                      <Send className="w-4 h-4" strokeWidth={2.5} />
+                    <button onClick={activeTab === 'training' ? handleTrainingSend : handleSend} disabled={!input.trim() || (activeTab === 'training' ? (selectedSection == null || !canChatWithSection(selectedSection)) : remainingMessages <= 0)} className="m-1.5 sm:m-2 p-2 sm:p-2.5 rounded-lg transition-all flex-shrink-0" style={{ backgroundColor: input.trim() && (activeTab === 'training' ? (selectedSection != null && canChatWithSection(selectedSection)) : remainingMessages > 0) ? currentTheme.accentPrimary : currentTheme.hoverBg, color: input.trim() && (activeTab === 'training' ? (selectedSection != null && canChatWithSection(selectedSection)) : remainingMessages > 0) ? '#ffffff' : currentTheme.textTertiary }}>
+                      <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" strokeWidth={2.5} />
                     </button>
                   </div>
                 </>
               ) : (
-                <div className="p-6 rounded-2xl border" style={{ backgroundColor: currentTheme.inputBg, borderColor: currentTheme.border, boxShadow: currentTheme.shadow }}>
-                  <h3 className="text-lg font-bold mb-4" style={{ color: currentTheme.textPrimary }}>
+                <div className="p-4 sm:p-6 rounded-xl sm:rounded-2xl border" style={{ backgroundColor: currentTheme.inputBg, borderColor: currentTheme.border, boxShadow: currentTheme.shadow }}>
+                  <h3 className="text-base sm:text-lg font-bold mb-3 sm:mb-4" style={{ color: currentTheme.textPrimary }}>
                     Continue Chatting
                   </h3>
-                  <div className="space-y-4">
+                  <div className="space-y-3 sm:space-y-4">
                     <div>
-                      <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
+                      <label className="block text-xs sm:text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
                         Name
                       </label>
-                      <input type="text" value={loginData.name} onChange={(e) => setLoginData({ ...loginData, name: e.target.value })} className="w-full px-4 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter your name" />
+                      <input type="text" value={loginData.name} onChange={(e) => setLoginData({ ...loginData, name: e.target.value })} className="w-full px-3 sm:px-4 py-2 rounded-lg border focus:outline-none text-sm" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter your name" />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
+                      <label className="block text-xs sm:text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
                         Phone Number
                       </label>
-                      <div className="flex gap-2">
-                        <select value={countryCode} onChange={(e) => setCountryCode(e.target.value)} className="px-3 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }}>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <select value={countryCode} onChange={(e) => setCountryCode(e.target.value)} className="px-2 sm:px-3 py-2 rounded-lg border focus:outline-none text-xs sm:text-sm" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }}>
                           <option value="+1">USA/Canada (+1)</option>
                           <option value="+91">India (+91)</option>
                           <option value="+44">UK (+44)</option>
                           <option value="+61">Australia (+61)</option>
                           <option value="+971">UAE (+971)</option>
                         </select>
-                        <input type="tel" inputMode="tel" value={nationalNumber} onChange={(e) => setNationalNumber(e.target.value.replace(/\D/g, ''))} onBlur={() => { if (loginData.name && nationalNumber && !otpRequested) { handleRequestOtp(); } }} className="flex-1 px-4 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter your number" />
+                        <input type="tel" inputMode="tel" value={nationalNumber} onChange={(e) => setNationalNumber(e.target.value.replace(/\D/g, ''))} onBlur={() => { if (loginData.name && nationalNumber && !otpRequested) { handleRequestOtp(); } }} className="flex-1 px-3 sm:px-4 py-2 rounded-lg border focus:outline-none text-sm" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter your number" />
                       </div>
                     </div>
                     {showOtpInput && (
                       <div>
-                        <label className="block text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
+                        <label className="block text-xs sm:text-sm font-medium mb-1" style={{ color: currentTheme.textSecondary }}>
                           OTP
                         </label>
-                        <input type="text" inputMode="numeric" maxLength={6} value={loginData.otp} onChange={(e) => setLoginData({ ...loginData, otp: e.target.value.replace(/\D/g, '') })} className="w-full px-4 py-2 rounded-lg border focus:outline-none" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter 6-digit OTP" />
+                        <input type="text" inputMode="numeric" maxLength={6} value={loginData.otp} onChange={(e) => setLoginData({ ...loginData, otp: e.target.value.replace(/\D/g, '') })} className="w-full px-3 sm:px-4 py-2 rounded-lg border focus:outline-none text-sm" style={{ backgroundColor: currentTheme.surfaceBg, borderColor: currentTheme.border, color: currentTheme.textPrimary }} placeholder="Enter 6-digit OTP" />
                         <p className="text-xs mt-2" style={{ color: currentTheme.textSecondary }}>{(() => { const p = normalizePhoneE164(nationalNumber, countryCode); return `OTP sent to ${p || ''}. ${isRequestingOtp ? 'Sending…' : otpRequested ? 'Didn\'t get it? Re-enter phone to resend.' : ''}`; })()}</p>
                       </div>
                     )}
-                    {loginError && (<div className="text-sm bg-red-500/10 border border-red-500/30 text-red-300 px-3 py-2 rounded-lg">{loginError}</div>)}
-                    <button onClick={showOtpInput ? handleLogin : handleRequestOtp} disabled={showOtpInput ? !(loginData.otp && loginData.otp.length >= 4) : !(loginData.name && nationalNumber) || isRequestingOtp} className="w-full py-2.5 rounded-xl text-sm font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed" style={{ backgroundColor: currentTheme.accentPrimary, color: '#ffffff', boxShadow: currentTheme.glow }}>
+                    {loginError && (<div className="text-xs sm:text-sm bg-red-500/10 border border-red-500/30 text-red-300 px-2.5 sm:px-3 py-2 rounded-lg">{loginError}</div>)}
+                    <button onClick={showOtpInput ? handleLogin : handleRequestOtp} disabled={showOtpInput ? !(loginData.otp && loginData.otp.length >= 4) : !(loginData.name && nationalNumber) || isRequestingOtp} className="w-full py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed" style={{ backgroundColor: currentTheme.accentPrimary, color: '#ffffff', boxShadow: currentTheme.glow }}>
                       {showOtpInput ? 'Verify & Continue' : (isRequestingOtp ? 'Sending OTP…' : 'Request OTP')}
                     </button>
                   </div>

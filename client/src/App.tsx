@@ -25,9 +25,14 @@ import { isAuthed, validateSession } from "./lib/auth";
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isValidSession, setIsValidSession] = useState(true);
+  const [location, setLocation] = useLocation();
 
   useEffect(() => {
+    let isActive = true;
+
     async function checkSession() {
+      if (!isActive) return;
+
       if (!isAuthed()) {
         setIsValidSession(false);
         setIsLoading(false);
@@ -35,11 +40,70 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
       }
 
       const isValid = await validateSession();
+      if (!isActive) return;
+
       setIsValidSession(isValid);
       setIsLoading(false);
+
+      // If session is invalid, clear auth and redirect
+      if (!isValid) {
+        localStorage.removeItem("auth");
+        localStorage.removeItem("token");
+      }
     }
 
+    // Initial check
     checkSession();
+
+    // Listen for storage changes (logout in another tab)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "auth" || e.key === "token") {
+        if (!isAuthed()) {
+          setIsValidSession(false);
+        } else {
+          checkSession();
+        }
+      }
+    }
+
+    // Listen for tab/window focus (user switches back to this tab)
+    const handleFocus = () => {
+      if (!isAuthed()) {
+        setIsValidSession(false);
+      } else {
+        checkSession();
+      }
+    };
+
+    // Listen for visibility change (tab becomes visible)
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        if (!isAuthed()) {
+          setIsValidSession(false);
+        } else {
+          checkSession();
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Periodic session check every 30 seconds
+    const interval = setInterval(() => {
+      if (!document.hidden && isAuthed()) {
+        checkSession();
+      }
+    }, 30000);
+
+    return () => {
+      isActive = false;
+      window.removeEventListener("storage", handleStorageChange);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      clearInterval(interval);
+    };
   }, []);
 
   if (isLoading) {

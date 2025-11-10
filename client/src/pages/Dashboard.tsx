@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import StatCard from "@/components/StatCard";
 import AnalyticsChart from "@/components/AnalyticsChart";
 import ConversationList from "@/components/ConversationList";
@@ -20,6 +21,30 @@ type ChatHistory = { lastInteraction?: string | Date };
 const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function Dashboard() {
+  const [, navigate] = useLocation();
+
+  // Check auth status on mount and when tab becomes visible
+  useEffect(() => {
+    const checkAuth = () => {
+      const isAuthed = localStorage.getItem("auth") === "true" && !!localStorage.getItem("token");
+      if (!isAuthed) {
+        navigate("/login");
+      }
+    };
+
+    checkAuth();
+
+    // Recheck when tab becomes visible
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        checkAuth();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [navigate]);
+
   const [totals, setTotals] = useState({
     totalLeads: 0,
     convertedLeads: 0,
