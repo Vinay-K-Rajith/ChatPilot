@@ -61,6 +61,8 @@ export interface TrainingProgress {
   phone: string;
   completedSections: number[]; // Array of s_no that are completed
   currentSection: number; // Current s_no user is on
+  inTrainingMode: boolean; // Is user currently in training flow
+  trainingStarted: boolean; // Has training been initiated
   sectionChats: {
     [key: number]: Array<{ // key is s_no
       role: 'user' | 'assistant';
@@ -1036,6 +1038,8 @@ const now = new Date();
       phone,
       completedSections: [],
       currentSection: 1, // Start at section 1
+      inTrainingMode: false,
+      trainingStarted: false,
       sectionChats: {},
       lastUpdated: now,
       createdAt: now
@@ -1176,6 +1180,107 @@ const now = new Date();
     
     const result = await collection.deleteOne({ _id: new ObjectId(id) });
     return result.deletedCount === 1;
+  }
+
+  /**
+   * Start training mode for a user
+   */
+  public async startTrainingMode(phone: string): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    await this.collections.trainingProgress.updateOne(
+      { phone },
+      {
+        $set: { 
+          inTrainingMode: true,
+          trainingStarted: true,
+          currentSection: 1,
+          lastUpdated: new Date()
+        },
+        $setOnInsert: {
+          completedSections: [],
+          sectionChats: {},
+          createdAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+  }
+
+  /**
+   * Exit training mode for a user
+   */
+  public async exitTrainingMode(phone: string): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    await this.collections.trainingProgress.updateOne(
+      { phone },
+      {
+        $set: { 
+          inTrainingMode: false,
+          lastUpdated: new Date()
+        }
+      }
+    );
+  }
+
+  /**
+   * Check if user is in training mode
+   */
+  public async isInTrainingMode(phone: string): Promise<boolean> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    const progress = await this.collections.trainingProgress.findOne({ phone });
+    return progress?.inTrainingMode || false;
+  }
+
+  /**
+   * Move to next training section
+   */
+  public async moveToNextSection(phone: string): Promise<number> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    const progress = await this.collections.trainingProgress.findOne({ phone });
+    const nextSection = (progress?.currentSection || 1) + 1;
+    
+    await this.collections.trainingProgress.updateOne(
+      { phone },
+      {
+        $set: { 
+          currentSection: nextSection,
+          lastUpdated: new Date()
+        }
+      }
+    );
+    
+    return nextSection;
+  }
+
+  /**
+   * Move to previous training section
+   */
+  public async moveToPreviousSection(phone: string): Promise<number> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    
+    const progress = await this.collections.trainingProgress.findOne({ phone });
+    const prevSection = Math.max(1, (progress?.currentSection || 1) - 1);
+    
+    await this.collections.trainingProgress.updateOne(
+      { phone },
+      {
+        $set: { 
+          currentSection: prevSection,
+          lastUpdated: new Date()
+        }
+      }
+    );
+    
+    return prevSection;
   }
 }
 
