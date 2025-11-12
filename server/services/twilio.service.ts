@@ -412,11 +412,11 @@ How can I help you today?`;
         return;
       }
 
-      // Send welcome message
-      const welcomeMsg = `🎉 Welcome ${userName}!\n\nI'm so glad you're here! Let's get you started with your partner training.\n\n` +
+      // Send welcome message (minimal emojis)
+      const welcomeMsg = `Welcome ${userName}!\n\nI'm glad you're here. Let's get you started with your partner training.\n\n` +
         `We have ${sections.length} training sessions designed to help you succeed. ` +
-        `Each session builds on the previous one, so we'll go through them together at your pace.\n\n` +
-        `Ready to begin? Let's start with Session 1! 🚀`;
+        `Each session builds on the previous one, so we'll go through them at your own pace.\n\n` +
+        `Let's start with Session 1.`;
       
       await this.sendMessage(phone, welcomeMsg);
 
@@ -434,14 +434,17 @@ How can I help you today?`;
   }
 
   /**
-   * Send a specific training section
+   * Send a specific training section with interactive buttons
    */
   private async sendTrainingSection(phone: string, sectionNo: number): Promise<void> {
     try {
+      console.log(`[Training] Sending section ${sectionNo} to ${phone}`);
+      
       const sections = await this.mongodbService.getTrainingSections();
       const section = sections.find(s => s.s_no === sectionNo);
       
       if (!section) {
+        console.error(`[Training] Section ${sectionNo} not found`);
         await this.sendMessage(phone, "This training section doesn't exist. Let me help you with the available sessions.");
         await this.showTrainingMenu(phone);
         return;
@@ -455,21 +458,75 @@ How can I help you today?`;
 
       const nameGreeting = userName ? `${userName}, ` : '';
       
-      // Send section heading and content
-      const sectionMsg = `📚 *Session ${section.s_no}: ${section.heading}*\n\n${section.content}\n\n` +
-        `${nameGreeting}take your time to read through this. When you're ready, feel free to:\n` +
-        `• Ask me questions about this session\n` +
-        `• Type "next" to continue to the next session\n` +
-        `• Type "menu" to see all options`;
+      // Send section heading and content (minimal emojis)
+      const sectionMsg = `*Session ${section.s_no}: ${section.heading}*\n\n${section.content}\n\n` +
+        `${nameGreeting}feel free to ask me questions about this session.`;
       
       await this.sendMessage(phone, sectionMsg);
+      console.log(`[Training] Sent section ${sectionNo} to ${phone}`);
       
-      // Store this in training chat history
-      await this.mongodbService.addTrainingMessage(phone, sectionNo, 'assistant', sectionMsg);
+      // Send interactive buttons
+      await this.sendTrainingButtons(phone, sectionNo, sections.length);
+      
+      // Store in both Training_Progress AND GMT_CH for conversation visibility
+      try {
+        // Store in Training_Progress (section-specific history)
+        await this.mongodbService.addTrainingMessage(phone, sectionNo, 'assistant', sectionMsg);
+        
+        // Store in GMT_CH (general conversation history for Conversations tab)
+        await this.mongodbService.addMessageToChatHistory(phone, 'assistant', sectionMsg, {
+          phone,
+          channel: 'whatsapp',
+          labels: ['whatsapp', 'training']
+        });
+        
+        console.log(`[Training] Stored section ${sectionNo} in both histories`);
+      } catch (storeError) {
+        console.error(`[Training] Failed to store section ${sectionNo}:`, storeError);
+      }
       
     } catch (error) {
-      console.error('Error sending training section:', error);
+      console.error('[Training] Error sending training section:', error);
       await this.sendMessage(phone, "Sorry, I had trouble loading that session. Please try again.");
+    }
+  }
+
+  /**
+   * Send interactive buttons for training navigation (minimal emojis)
+   */
+  private async sendTrainingButtons(phone: string, currentSection: number, totalSections: number): Promise<void> {
+    try {
+      // Build button options based on current position
+      const buttons: string[] = [];
+      
+      // Always show Next button (unless at last section)
+      if (currentSection < totalSections) {
+        buttons.push('Next');
+      }
+      
+      // Show Previous if not at first section
+      if (currentSection > 1) {
+        buttons.push('Previous');
+      }
+      
+      // Always show Menu and Complete buttons
+      buttons.push('Menu');
+      buttons.push('Complete');
+      
+      // If at last section, show Exit
+      if (currentSection === totalSections) {
+        buttons.push('Exit');
+      }
+      
+      // Create button message with less emojis
+      const buttonMsg = `\n*Options:* ${buttons.join(' • ')}`;
+      await this.sendMessage(phone, buttonMsg);
+      
+    } catch (error) {
+      console.error('[Training] Error sending buttons:', error);
+      // Fallback to text instructions
+      const fallbackMsg = `\n_Type: next, previous, menu, complete, or exit_`;
+      await this.sendMessage(phone, fallbackMsg);
     }
   }
 
@@ -544,17 +601,17 @@ How can I help you today?`;
     const totalSections = sections.length;
     const completedCount = progress.completedSections.length;
     
-    const menuMsg = `📋 *Training Menu*\n\n` +
-      `📊 Progress: ${completedCount}/${totalSections} sessions completed\n` +
-      `📍 Current: Session ${progress.currentSection}\n\n` +
+    const menuMsg = `*Training Menu*\n\n` +
+      `Progress: ${completedCount}/${totalSections} sessions completed\n` +
+      `Current: Session ${progress.currentSection}\n\n` +
       `*Available Commands:*\n` +
-      `• *next* - Move to next session\n` +
-      `• *previous* - Go back to previous session\n` +
-      `• *complete* - Mark current session as done\n` +
-      `• *section [number]* - Jump to a specific session\n` +
-      `• *restart* - Start training from beginning\n` +
-      `• *exit* - Exit training mode\n\n` +
-      `💬 You can also ask me questions about the current session anytime!`;
+      `• next - Move to next session\n` +
+      `• previous - Go back to previous session\n` +
+      `• complete - Mark current session as done\n` +
+      `• section [number] - Jump to a specific session\n` +
+      `• restart - Start training from beginning\n` +
+      `• exit - Exit training mode\n\n` +
+      `You can also ask me questions about the current session anytime.`;
     
     await this.sendMessage(phone, menuMsg);
   }
@@ -567,11 +624,11 @@ How can I help you today?`;
     const nextSection = currentSection + 1;
     
     if (nextSection > sections.length) {
-      const completionMsg = `🎊 *Congratulations!*\n\n` +
+      const completionMsg = `*Congratulations!*\n\n` +
         `You've completed all ${sections.length} training sessions! ` +
         `You're now ready to start your journey as a partner.\n\n` +
-        `If you need to review anything, just type "section [number]" or "restart" to go through the training again.\n\n` +
-        `Type "exit" when you're ready to leave training mode. Welcome to the team! 🚀`;
+        `If you need to review anything, type "section [number]" or "restart" to go through the training again.\n\n` +
+        `Type "exit" when you're ready to leave training mode. Welcome to the team!`;
       
       await this.sendMessage(phone, completionMsg);
       return;
@@ -604,8 +661,8 @@ How can I help you today?`;
     const progress = await this.mongodbService.getTrainingProgress(phone);
     const completedCount = progress?.completedSections.length || 0;
     
-    const completeMsg = `✅ Great job! Session ${sectionNo} marked as complete.\n\n` +
-      `📊 Progress: ${completedCount}/${sections.length} sessions completed\n\n` +
+    const completeMsg = `Great job! Session ${sectionNo} marked as complete.\n\n` +
+      `Progress: ${completedCount}/${sections.length} sessions completed\n\n` +
       `Type "next" to continue or "menu" for more options.`;
     
     await this.sendMessage(phone, completeMsg);
@@ -621,10 +678,10 @@ How can I help you today?`;
     
     await this.mongodbService.exitTrainingMode(phone);
     
-    const exitMsg = `👋 You've exited training mode.\n\n` +
-      `📊 You completed ${completedCount} out of ${sections.length} sessions.\n\n` +
+    const exitMsg = `You've exited training mode.\n\n` +
+      `You completed ${completedCount} out of ${sections.length} sessions.\n\n` +
       `You can return anytime by saying "start training" or "I am a new partner". ` +
-      `Your progress has been saved!\n\n` +
+      `Your progress has been saved.\n\n` +
       `How else can I help you today?`;
     
     await this.sendMessage(phone, exitMsg);
@@ -636,7 +693,7 @@ How can I help you today?`;
   private async handleRestartTraining(phone: string): Promise<void> {
     await this.mongodbService.updateCurrentSection(phone, 1);
     
-    const restartMsg = `🔄 Training restarted! Let's begin from Session 1.`;
+    const restartMsg = `Training restarted. Let's begin from Session 1.`;
     await this.sendMessage(phone, restartMsg);
     
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -663,12 +720,31 @@ How can I help you today?`;
    */
   private async handleTrainingQuestion(phone: string, sectionNo: number, question: string): Promise<void> {
     try {
+      console.log(`[Training Q&A] Processing question from ${phone}, section ${sectionNo}`);
+      
       const sections = await this.mongodbService.getTrainingSections();
       const section = sections.find(s => s.s_no === sectionNo);
       
       if (!section) {
+        console.error(`[Training Q&A] Section ${sectionNo} not found`);
         await this.sendMessage(phone, "I'm having trouble loading the current session. Type 'menu' for options.");
         return;
+      }
+
+      // Store user question FIRST in both histories
+      try {
+        // Store in Training_Progress (section-specific)
+        await this.mongodbService.addTrainingMessage(phone, sectionNo, 'user', question);
+        
+        // Store in GMT_CH (general conversation for Conversations tab)
+        await this.mongodbService.addMessageToChatHistory(phone, 'user', question, {
+          phone,
+          channel: 'whatsapp',
+          labels: ['whatsapp', 'training']
+        });
+      } catch (storeError) {
+        console.error('[Training Q&A] Failed to store user question:', storeError);
+        // Continue anyway - don't block the response
       }
 
       // Get conversation history for this section
@@ -679,6 +755,8 @@ How can I help you today?`;
         content: m.content
       }));
 
+      console.log(`[Training Q&A] Chat history length: ${conversationHistory.length}`);
+
       // Get user's name
       const lead = await this.mongodbService.getLeadByPhone(phone);
       const userName = lead?.name && typeof lead.name === 'string' && /^[A-Za-z][A-Za-z'\- ]{1,40}$/.test(lead.name) 
@@ -686,6 +764,7 @@ How can I help you today?`;
         : undefined;
 
       // Generate AI response using training-specific prompt
+      console.log(`[Training Q&A] Generating AI response...`);
       const response = await this.openaiService.generateTrainingResponse(
         question,
         section.heading,
@@ -694,20 +773,30 @@ How can I help you today?`;
         userName
       );
 
-      // Store both question and answer in training chat history
-      await this.mongodbService.addTrainingMessage(phone, sectionNo, 'user', question);
-      await this.mongodbService.addTrainingMessage(phone, sectionNo, 'assistant', response);
+      // Store assistant response in both histories
+      try {
+        // Store in Training_Progress (section-specific)
+        await this.mongodbService.addTrainingMessage(phone, sectionNo, 'assistant', response);
+        
+        // Store in GMT_CH (general conversation for Conversations tab)
+        await this.mongodbService.addMessageToChatHistory(phone, 'assistant', response, {
+          phone,
+          channel: 'whatsapp',
+          labels: ['whatsapp', 'training']
+        });
+      } catch (storeError) {
+        console.error('[Training Q&A] Failed to store assistant response:', storeError);
+        // Continue anyway - user still gets the response
+      }
 
-      // Send response
-      await this.sendMessage(phone, response);
-
-      // After answering, provide a gentle reminder of options
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      const reminderMsg = `\n💡 Type "next" to continue, or "menu" to see all options.`;
-      await this.sendMessage(phone, reminderMsg);
+      // Send response with inline reminder (minimal emojis)
+      const responseWithReminder = `${response}\n\n_Type "next" to continue, or "menu" for more options._`;
+      await this.sendMessage(phone, responseWithReminder);
+      
+      console.log(`[Training Q&A] Successfully handled question for ${phone}`);
       
     } catch (error) {
-      console.error('Error handling training question:', error);
+      console.error('[Training Q&A] Error handling training question:', error);
       await this.sendMessage(phone, "Sorry, I had trouble processing your question. Please try again or type 'menu' for options.");
     }
   }

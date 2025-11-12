@@ -1072,20 +1072,33 @@ const now = new Date();
     await this.ensureConnected();
     if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
     
-    const message = {
-      role,
-      content,
-      timestamp: new Date()
-    };
-    
-    await this.collections.trainingProgress.updateOne(
-      { phone },
-      {
-        $push: { [`sectionChats.${sectionNo}`]: message } as any,
-        $set: { lastUpdated: new Date() }
-      },
-      { upsert: true }
-    );
+    try {
+      // Ensure progress document exists first
+      await this.getOrCreateTrainingProgress(phone);
+      
+      const message = {
+        role,
+        content,
+        timestamp: new Date()
+      };
+      
+      const result = await this.collections.trainingProgress.updateOne(
+        { phone },
+        {
+          $push: { [`sectionChats.${sectionNo}`]: message } as any,
+          $set: { lastUpdated: new Date() }
+        }
+      );
+      
+      if (result.modifiedCount === 0 && result.matchedCount === 0) {
+        console.error(`Failed to store training message for ${phone}, section ${sectionNo}`);
+      } else {
+        console.log(`✓ Stored training message for ${phone}, section ${sectionNo}, role: ${role}`);
+      }
+    } catch (error) {
+      console.error('Error storing training message:', error);
+      throw error;
+    }
   }
 
   /**
