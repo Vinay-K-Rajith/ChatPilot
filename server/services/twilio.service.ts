@@ -61,18 +61,62 @@ const cc = (process.env.DEFAULT_COUNTRY_CODE || '1').replace(/\D/g, '');
     await this.mongodbService.connect();
   }
 
+  /**
+   * Split message at sentence boundaries if it exceeds the WhatsApp character limit.
+   * WhatsApp hard-limits message size (~1600 chars). We use 1500 as a safe threshold.
+   */
+  private splitMessageBySentences(message: string, maxLength: number = 1500): string[] {
+    try {
+      if (!message || message.length <= maxLength) return [message];
+
+      const parts: string[] = [];
+      let current = '';
+      const sentences = message.split(/(?<=[.!?])\s+/);
+
+      for (const s of sentences) {
+        const seg = s.trim();
+        if (!seg) continue;
+        if (current.length + seg.length + 1 > maxLength && current.length > 0) {
+          parts.push(current.trim());
+          current = seg;
+        } else {
+          current = current ? `${current} ${seg}` : seg;
+        }
+      }
+      if (current.trim()) parts.push(current.trim());
+
+      // If split somehow failed, fall back to chunking by maxLength
+      if (parts.length === 0) {
+        for (let i = 0; i < message.length; i += maxLength) {
+          parts.push(message.slice(i, i + maxLength));
+        }
+      }
+      return parts;
+    } catch {
+      return [message];
+    }
+  }
+
   public async sendMessage(to: string, message: string): Promise<boolean> {
     // Backward-compatible: defaults to WhatsApp if TWILIO_PHONE_NUMBER is set with whatsapp: prefix
     try {
       const fromAddr = this.phoneNumber.startsWith('whatsapp:') ? this.phoneNumber : `whatsapp:${this.phoneNumber}`;
       const toAddr = to.startsWith('whatsapp:') ? to : `whatsapp:${to}`;
-      const result = await this.client.messages.create({
-        body: message,
-        from: fromAddr,
-        to: toAddr,
-      });
 
-      console.log(`WhatsApp message sent. SID: ${result.sid}`);
+      const chunks = this.splitMessageBySentences(message, 1500);
+      for (let i = 0; i < chunks.length; i++) {
+        const part = chunks[i];
+        if (!part?.trim()) continue;
+        const result = await this.client.messages.create({
+          body: part,
+          from: fromAddr,
+          to: toAddr,
+        });
+        console.log(`WhatsApp message sent. SID: ${result.sid}`);
+        if (i < chunks.length - 1) {
+          await new Promise(r => setTimeout(r, 150));
+        }
+      }
       return true;
     } catch (error) {
       console.error('Error sending WhatsApp message:', error);
@@ -134,25 +178,31 @@ const cc = (process.env.DEFAULT_COUNTRY_CODE || '1').replace(/\D/g, '');
         // Ensure a lead record exists for this phone (sets defaults on insert)
         try { await this.mongodbService.upsertLeadByPhone(e164, {}); } catch {}
 
-        // Store user message in chat history (store without whatsapp: prefix)
-        await this.mongodbService.addMessageToChatHistory(e164, 'user', message, {
-          phone: e164,
-          channel: 'whatsapp',
-          labels: ['whatsapp']
-        });
-
-        // Check for training enrollment triggers
+        // Check for training enrollment triggers FIRST
         if (this.isTrainingEnrollmentMessage(message)) {
+          // Record the inbound once
+          await this.mongodbService.addMessageToChatHistory(e164, 'user', message, {
+            phone: e164,
+            channel: 'whatsapp',
+            labels: ['whatsapp']
+          });
           await this.startTrainingFlow(e164);
           return;
         }
 
-        // Check if user is in training mode
+        // If already in training mode, delegate handling (avoid double-storing here).
         const inTraining = await this.mongodbService.isInTrainingMode(e164);
         if (inTraining) {
           await this.handleTrainingMessage(e164, message);
           return;
         }
+
+        // Not in training: store inbound to general chat history once
+        await this.mongodbService.addMessageToChatHistory(e164, 'user', message, {
+          phone: e164,
+          channel: 'whatsapp',
+          labels: ['whatsapp']
+        });
 
         // Determine if we should capture or request the user's name
         const awaitingName = await this.mongodbService.getAwaitingName(e164);
@@ -492,40 +542,48 @@ How can I help you today?`;
   }
 
   /**
-   * Send interactive buttons for training navigation (minimal emojis)
+   * Send interactive buttons for training navigation.
+   * Tries WhatsApp interactive buttons first; falls back to text options if unsupported.
    */
   private async sendTrainingButtons(phone: string, currentSection: number, totalSections: number): Promise<void> {
     try {
       // Build button options based on current position
-      const buttons: string[] = [];
-      
-      // Always show Next button (unless at last section)
-      if (currentSection < totalSections) {
-        buttons.push('Next');
+      const btnTitles: string[] = [];
+      if (currentSection < totalSections) btnTitles.push('Next');
+      if (currentSection > 1) btnTitles.push('Previous');
+      btnTitles.push('Menu');
+      btnTitles.push('Complete');
+      if (currentSection === totalSections) btnTitles.push('Exit');
+
+      const fromAddr = this.phoneNumber.startsWith('whatsapp:') ? this.phoneNumber : `whatsapp:${this.phoneNumber}`;
+      const toAddr = phone.startsWith('whatsapp:') ? phone : `whatsapp:${phone}`;
+
+      // Try WhatsApp interactive buttons via Twilio API (best UX)
+      const interactivePayload: any = {
+        from: fromAddr,
+        to: toAddr,
+        interactive: {
+          type: 'button',
+          body: { text: 'Options' },
+          action: {
+            buttons: btnTitles.map(t => ({ type: 'reply', reply: { id: t.toLowerCase(), title: t } }))
+          }
+        }
+      };
+
+      try {
+        await (this.client as any).messages.create(interactivePayload);
+        return;
+      } catch (e: any) {
+        console.warn('[Training] Interactive buttons not supported, falling back to text.', e?.message || String(e));
       }
-      
-      // Show Previous if not at first section
-      if (currentSection > 1) {
-        buttons.push('Previous');
-      }
-      
-      // Always show Menu and Complete buttons
-      buttons.push('Menu');
-      buttons.push('Complete');
-      
-      // If at last section, show Exit
-      if (currentSection === totalSections) {
-        buttons.push('Exit');
-      }
-      
-      // Create button message with less emojis
-      const buttonMsg = `\n*Options:* ${buttons.join(' • ')}`;
+
+      // Fallback to plain text options
+      const buttonMsg = `\nReply with: ${btnTitles.map(t => `*${t.toLowerCase()}*`).join(' | ')}`;
       await this.sendMessage(phone, buttonMsg);
-      
     } catch (error) {
       console.error('[Training] Error sending buttons:', error);
-      // Fallback to text instructions
-      const fallbackMsg = `\n_Type: next, previous, menu, complete, or exit_`;
+      const fallbackMsg = `You can type: next, previous, menu, complete, or exit`;
       await this.sendMessage(phone, fallbackMsg);
     }
   }
@@ -630,10 +688,19 @@ How can I help you today?`;
         `If you need to review anything, type "section [number]" or "restart" to go through the training again.\n\n` +
         `Type "exit" when you're ready to leave training mode. Welcome to the team!`;
       
+      // Ensure progress reflects completion
+      const progress = await this.mongodbService.getTrainingProgress(phone);
+      for (let i = 1; i <= sections.length; i++) {
+        if (!progress?.completedSections.includes(i)) {
+          await this.mongodbService.markSectionCompleted(phone, i);
+        }
+      }
       await this.sendMessage(phone, completionMsg);
       return;
     }
     
+    // Persist progress: mark current as completed and move to next
+    await this.mongodbService.markSectionCompleted(phone, currentSection);
     await this.mongodbService.moveToNextSection(phone);
     await this.sendTrainingSection(phone, nextSection);
   }
@@ -790,7 +857,8 @@ How can I help you today?`;
       }
 
       // Send response with inline reminder (minimal emojis)
-      const responseWithReminder = `${response}\n\n_Type "next" to continue, or "menu" for more options._`;
+      // Long responses will be split automatically by sendMessage()
+      const responseWithReminder = `${response}\n\n_Type \"next\" to continue, or \"menu\" for more options._`;
       await this.sendMessage(phone, responseWithReminder);
       
       console.log(`[Training Q&A] Successfully handled question for ${phone}`);
