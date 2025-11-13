@@ -190,9 +190,14 @@ const cc = (process.env.DEFAULT_COUNTRY_CODE || '1').replace(/\D/g, '');
           return;
         }
 
-        // If already in training mode, delegate handling (avoid double-storing here).
+        // If already in training mode, store message in GMT_CH first, then delegate handling
         const inTraining = await this.mongodbService.isInTrainingMode(e164);
         if (inTraining) {
+          await this.mongodbService.addMessageToChatHistory(e164, 'user', message, {
+            phone: e164,
+            channel: 'whatsapp',
+            labels: ['whatsapp', 'training']
+          });
           await this.handleTrainingMessage(e164, message);
           return;
         }
@@ -474,7 +479,8 @@ How can I help you today?`;
       await new Promise(resolve => setTimeout(resolve, 1500));
 
       // Send first section
-      await this.sendTrainingSection(phone, 1);
+      const firstSectionSNo = sections[0].s_no;
+      await this.sendTrainingSection(phone, firstSectionSNo);
       
       console.log(`✓ Training started for ${phone}`);
     } catch (error) {
@@ -671,6 +677,13 @@ How can I help you today?`;
       `• exit - Exit training mode\n\n` +
       `You can also ask me questions about the current session anytime.`;
     
+    // Store response in GMT_CH
+    await this.mongodbService.addMessageToChatHistory(phone, 'assistant', menuMsg, {
+      phone,
+      channel: 'whatsapp',
+      labels: ['whatsapp', 'training']
+    });
+    
     await this.sendMessage(phone, menuMsg);
   }
 
@@ -679,43 +692,66 @@ How can I help you today?`;
    */
   private async handleNextSection(phone: string, currentSection: number): Promise<void> {
     const sections = await this.mongodbService.getTrainingSections();
-    const nextSection = currentSection + 1;
+    const currentIndex = sections.findIndex(s => s.s_no === currentSection);
+    const nextIndex = currentIndex + 1;
     
-    if (nextSection > sections.length) {
+    // Check if we're at the last section
+    if (nextIndex >= sections.length) {
       const completionMsg = `*Congratulations!*\n\n` +
         `You've completed all ${sections.length} training sessions! ` +
         `You're now ready to start your journey as a partner.\n\n` +
         `If you need to review anything, type "section [number]" or "restart" to go through the training again.\n\n` +
         `Type "exit" when you're ready to leave training mode. Welcome to the team!`;
       
-      // Ensure progress reflects completion
+      // Mark current (last) section complete
+      await this.mongodbService.markSectionCompleted(phone, currentSection);
+      
+      // Ensure all sections are marked complete
       const progress = await this.mongodbService.getTrainingProgress(phone);
-      for (let i = 1; i <= sections.length; i++) {
-        if (!progress?.completedSections.includes(i)) {
-          await this.mongodbService.markSectionCompleted(phone, i);
+      for (const section of sections) {
+        if (!progress?.completedSections.includes(section.s_no)) {
+          await this.mongodbService.markSectionCompleted(phone, section.s_no);
         }
       }
+      
+      // Store response in GMT_CH
+      await this.mongodbService.addMessageToChatHistory(phone, 'assistant', completionMsg, {
+        phone,
+        channel: 'whatsapp',
+        labels: ['whatsapp', 'training']
+      });
+      
       await this.sendMessage(phone, completionMsg);
       return;
     }
     
     // Persist progress: mark current as completed and move to next
     await this.mongodbService.markSectionCompleted(phone, currentSection);
-    await this.mongodbService.moveToNextSection(phone);
-    await this.sendTrainingSection(phone, nextSection);
+    const nextSectionSNo = await this.mongodbService.moveToNextSection(phone);
+    await this.sendTrainingSection(phone, nextSectionSNo);
   }
 
   /**
    * Handle moving to previous section
    */
   private async handlePreviousSection(phone: string, currentSection: number): Promise<void> {
-    if (currentSection <= 1) {
-      await this.sendMessage(phone, "You're already at the first session! Type 'next' to continue or 'menu' for more options.");
+    const sections = await this.mongodbService.getTrainingSections();
+    const currentIndex = sections.findIndex(s => s.s_no === currentSection);
+    
+    // Check if we're at the first section
+    if (currentIndex <= 0) {
+      const errorMsg = "You're already at the first session! Type 'next' to continue or 'menu' for more options.";
+      await this.mongodbService.addMessageToChatHistory(phone, 'assistant', errorMsg, {
+        phone,
+        channel: 'whatsapp',
+        labels: ['whatsapp', 'training']
+      });
+      await this.sendMessage(phone, errorMsg);
       return;
     }
     
-    const prevSection = await this.mongodbService.moveToPreviousSection(phone);
-    await this.sendTrainingSection(phone, prevSection);
+    const prevSectionSNo = await this.mongodbService.moveToPreviousSection(phone);
+    await this.sendTrainingSection(phone, prevSectionSNo);
   }
 
   /**
@@ -731,6 +767,13 @@ How can I help you today?`;
     const completeMsg = `Great job! Session ${sectionNo} marked as complete.\n\n` +
       `Progress: ${completedCount}/${sections.length} sessions completed\n\n` +
       `Type "next" to continue or "menu" for more options.`;
+    
+    // Store response in GMT_CH
+    await this.mongodbService.addMessageToChatHistory(phone, 'assistant', completeMsg, {
+      phone,
+      channel: 'whatsapp',
+      labels: ['whatsapp', 'training']
+    });
     
     await this.sendMessage(phone, completeMsg);
   }
@@ -751,6 +794,13 @@ How can I help you today?`;
       `Your progress has been saved.\n\n` +
       `How else can I help you today?`;
     
+    // Store response in GMT_CH
+    await this.mongodbService.addMessageToChatHistory(phone, 'assistant', exitMsg, {
+      phone,
+      channel: 'whatsapp',
+      labels: ['whatsapp', 'training']
+    });
+    
     await this.sendMessage(phone, exitMsg);
   }
 
@@ -758,28 +808,46 @@ How can I help you today?`;
    * Handle restarting training from beginning
    */
   private async handleRestartTraining(phone: string): Promise<void> {
-    await this.mongodbService.updateCurrentSection(phone, 1);
+    const sections = await this.mongodbService.getTrainingSections();
+    const firstSectionSNo = sections.length > 0 ? sections[0].s_no : 1;
+    
+    await this.mongodbService.updateCurrentSection(phone, firstSectionSNo);
     
     const restartMsg = `Training restarted. Let's begin from Session 1.`;
+    
+    // Store response in GMT_CH
+    await this.mongodbService.addMessageToChatHistory(phone, 'assistant', restartMsg, {
+      phone,
+      channel: 'whatsapp',
+      labels: ['whatsapp', 'training']
+    });
+    
     await this.sendMessage(phone, restartMsg);
     
     await new Promise(resolve => setTimeout(resolve, 1000));
-    await this.sendTrainingSection(phone, 1);
+    await this.sendTrainingSection(phone, firstSectionSNo);
   }
 
   /**
-   * Handle jumping to a specific section
+   * Handle jumping to a specific section by s_no
    */
-  private async handleJumpToSection(phone: string, targetSection: number): Promise<void> {
+  private async handleJumpToSection(phone: string, targetSectionSNo: number): Promise<void> {
     const sections = await this.mongodbService.getTrainingSections();
+    const targetSection = sections.find(s => s.s_no === targetSectionSNo);
     
-    if (targetSection < 1 || targetSection > sections.length) {
-      await this.sendMessage(phone, `Session ${targetSection} doesn't exist. We have ${sections.length} sessions available. Type "menu" to see options.`);
+    if (!targetSection) {
+      const errorMsg = `Session ${targetSectionSNo} not found. Type 'menu' to see available options.`;
+      await this.mongodbService.addMessageToChatHistory(phone, 'assistant', errorMsg, {
+        phone,
+        channel: 'whatsapp',
+        labels: ['whatsapp', 'training']
+      });
+      await this.sendMessage(phone, errorMsg);
       return;
     }
     
-    await this.mongodbService.updateCurrentSection(phone, targetSection);
-    await this.sendTrainingSection(phone, targetSection);
+    await this.mongodbService.updateCurrentSection(phone, targetSectionSNo);
+    await this.sendTrainingSection(phone, targetSectionSNo);
   }
 
   /**
@@ -798,17 +866,9 @@ How can I help you today?`;
         return;
       }
 
-      // Store user question FIRST in both histories
+      // Store user question in Training_Progress (section-specific) only
       try {
-        // Store in Training_Progress (section-specific)
         await this.mongodbService.addTrainingMessage(phone, sectionNo, 'user', question);
-        
-        // Store in GMT_CH (general conversation for Conversations tab)
-        await this.mongodbService.addMessageToChatHistory(phone, 'user', question, {
-          phone,
-          channel: 'whatsapp',
-          labels: ['whatsapp', 'training']
-        });
       } catch (storeError) {
         console.error('[Training Q&A] Failed to store user question:', storeError);
         // Continue anyway - don't block the response
@@ -816,8 +876,8 @@ How can I help you today?`;
 
       // Get conversation history for this section
       const progress = await this.mongodbService.getOrCreateTrainingProgress(phone);
-      const sectionChat = progress.sectionChats?.[sectionNo] || [];
-      const conversationHistory = sectionChat.map(m => ({
+      const sectionChat = await this.mongodbService.getTrainingChatHistory(phone, sectionNo);
+      const conversationHistory = sectionChat.map((m: any) => ({
         role: m.role,
         content: m.content
       }));

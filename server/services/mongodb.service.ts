@@ -52,27 +52,9 @@ type MongoDBCollections = {
   gmt_cust?: Collection<GMTCustomer>;
   gmt_otp?: Collection<OTPRecord>;
   whatsappTemplates?: Collection<WhatsAppTemplate>;
+  trainingSections?: Collection<TrainingSection>;
   trainingProgress?: Collection<TrainingProgress>;
 };
-
-// Training Progress interface
-export interface TrainingProgress {
-  _id?: ObjectId;
-  phone: string;
-  completedSections: number[]; // Array of s_no that are completed
-  currentSection: number; // Current s_no user is on
-  inTrainingMode: boolean; // Is user currently in training flow
-  trainingStarted: boolean; // Has training been initiated
-  sectionChats: {
-    [key: number]: Array<{ // key is s_no
-      role: 'user' | 'assistant';
-      content: string;
-      timestamp: Date;
-    }>;
-  };
-  lastUpdated: Date;
-  createdAt: Date;
-}
 
 // Define interfaces for our data models
 export interface Customer {
@@ -127,6 +109,36 @@ export interface ServerLegacyArticle {
   category?: string;
 }
 
+// Training-related interfaces
+export interface TrainingSection {
+  _id?: ObjectId;
+  s_no: number;
+  heading: string;
+  content: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface TrainingMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+export interface TrainingProgress {
+  _id?: ObjectId;
+  phone: string;
+  currentSection: number;
+  completedSections: number[];
+  inTrainingMode: boolean;
+  trainingStarted: boolean;
+  sectionChats: {
+    [sectionNo: number]: TrainingMessage[];
+  };
+  lastUpdated: Date;
+  createdAt: Date;
+}
+
 /**
  * MongoDB Service - Singleton implementation for MongoDB database operations
  */
@@ -172,6 +184,7 @@ export class MongoDBService {
         gmt_cust: db.collection<GMTCustomer>('GMT_Cust'),
         gmt_otp: db.collection<OTPRecord>('GMT_OTP'),
         whatsappTemplates: db.collection<WhatsAppTemplate>('WhatsApp_Templates'),
+        trainingSections: db.collection<TrainingSection>('Training_KB'),
         trainingProgress: db.collection<TrainingProgress>('Training_Progress')
       };
 
@@ -228,8 +241,13 @@ export class MongoDBService {
       await this.collections.whatsappTemplates?.createIndex({ contentSid: 1 }, { unique: true });
       await this.collections.whatsappTemplates?.createIndex({ createdAt: -1 });
 
+      // Create indexes for Training Sections
+      await this.collections.trainingSections?.createIndex({ s_no: 1 }, { unique: true });
+      await this.collections.trainingSections?.createIndex({ createdAt: -1 });
+
       // Create indexes for Training Progress
       await this.collections.trainingProgress?.createIndex({ phone: 1 }, { unique: true });
+      await this.collections.trainingProgress?.createIndex({ inTrainingMode: 1 });
       await this.collections.trainingProgress?.createIndex({ lastUpdated: -1 });
 
       this.isConnected = true;
@@ -587,14 +605,13 @@ await this.collections.leads.updateOne(
     return { ...lead, _id: (lead as any)._id?.toString() } as any;
   }
 
-  /** Get multiple leads by their string IDs */
   public async getLeadsByIds(ids: string[]): Promise<any[]> {
     await this.ensureConnected();
     if (!this.collections.leads) throw new Error('Leads collection is not initialized');
     if (!ids || ids.length === 0) return [];
     const objectIds = ids.map(id => new ObjectId(id));
-    const items = await this.collections.leads.find({ _id: { $in: objectIds } } as any).toArray();
-    return items.map(i => ({ ...(i as any), _id: (i as any)._id?.toString() }));
+    const leads = await this.collections.leads.find({ _id: { $in: objectIds } } as any).toArray();
+    return leads.map(lead => ({ ...lead, _id: lead._id?.toString() }));
   }
 
   public async createLead(leadData: Omit<Lead, '_id' | 'createdAt' | 'updatedAt'>): Promise<any> {
@@ -998,302 +1015,244 @@ const now = new Date();
     await this.setChatMetadataFields(phoneNumber, { awaitingName: awaiting });
   }
 
-  // ============== Training Progress Methods ==============
+  // ============== Training Methods ==============
   
-  /**
-   * Get training sections from Training_KB collection
-   */
-  public async getTrainingSections(): Promise<Array<{ _id: ObjectId; s_no: number; heading: string; content: string }>> {
+  /** Get all training sections ordered by s_no */
+  public async getTrainingSections(): Promise<TrainingSection[]> {
     await this.ensureConnected();
-    const db = this.client.db(this.dbName);
-    const collection = db.collection('Training_KB');
-    const sections = await collection.find({}).sort({ s_no: 1 }).toArray();
-    return sections.map(s => ({
-      _id: s._id,
-      s_no: s.s_no,
-      heading: s.heading,
-      content: s.content
-    }));
+    if (!this.collections.trainingSections) throw new Error('Training sections collection is not initialized');
+    const sections = await this.collections.trainingSections.find().sort({ s_no: 1 }).toArray();
+    return sections.map(s => ({ ...s, _id: s._id?.toString() })) as any[];
   }
 
-  /**
-   * Get training progress for a user
-   */
-  public async getTrainingProgress(phone: string): Promise<TrainingProgress | null> {
-    await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
-    const progress = await this.collections.trainingProgress.findOne({ phone });
-    return progress;
-  }
-
-  /**
-   * Initialize training progress for a new user
-   */
-  public async initializeTrainingProgress(phone: string): Promise<TrainingProgress> {
-    await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
-    
-    const now = new Date();
-    const progress: TrainingProgress = {
-      phone,
-      completedSections: [],
-      currentSection: 1, // Start at section 1
-      inTrainingMode: false,
-      trainingStarted: false,
-      sectionChats: {},
-      lastUpdated: now,
-      createdAt: now
-    };
-    
-    await this.collections.trainingProgress.insertOne(progress as any);
-    return progress;
-  }
-
-  /**
-   * Get or create training progress for a user
-   */
+  /** Get or create training progress for a phone number */
   public async getOrCreateTrainingProgress(phone: string): Promise<TrainingProgress> {
-    let progress = await this.getTrainingProgress(phone);
-    if (!progress) {
-      progress = await this.initializeTrainingProgress(phone);
-    }
-    return progress;
-  }
-
-  /**
-   * Add a message to a training section's chat history
-   */
-  public async addTrainingMessage(
-    phone: string,
-    sectionNo: number,
-    role: 'user' | 'assistant',
-    content: string
-  ): Promise<void> {
     await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
     
-    try {
-      // Ensure progress document exists first
-      await this.getOrCreateTrainingProgress(phone);
+    const normalizedPhone = normalizePhoneE164(phone);
+    let progress = await this.collections.trainingProgress.findOne({ phone: normalizedPhone });
+    
+    if (!progress) {
+      const sections = await this.getTrainingSections();
+      const firstSectionNo = sections.length > 0 ? sections[0].s_no : 1;
       
-      const message = {
-        role,
-        content,
-        timestamp: new Date()
+      const newProgress: TrainingProgress = {
+        phone: normalizedPhone,
+        currentSection: firstSectionNo,
+        completedSections: [],
+        inTrainingMode: false,
+        trainingStarted: false,
+        sectionChats: {},
+        lastUpdated: new Date(),
+        createdAt: new Date()
       };
       
-      const result = await this.collections.trainingProgress.updateOne(
-        { phone },
-        {
-          $push: { [`sectionChats.${sectionNo}`]: message } as any,
-          $set: { lastUpdated: new Date() }
-        }
-      );
-      
-      if (result.modifiedCount === 0 && result.matchedCount === 0) {
-        console.error(`Failed to store training message for ${phone}, section ${sectionNo}`);
-      } else {
-        console.log(`✓ Stored training message for ${phone}, section ${sectionNo}, role: ${role}`);
-      }
-    } catch (error) {
-      console.error('Error storing training message:', error);
-      throw error;
+      await this.collections.trainingProgress.insertOne(newProgress as any);
+      progress = newProgress as any;
     }
+    
+    if (!progress) throw new Error('Failed to get or create training progress');
+    return { ...progress, _id: progress._id?.toString() } as any;
   }
 
-  /**
-   * Mark a training section as completed
-   */
-  public async markSectionCompleted(phone: string, sectionNo: number): Promise<void> {
+  /** Get training progress for a phone number */
+  public async getTrainingProgress(phone: string): Promise<TrainingProgress | null> {
     await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
-    
-    await this.collections.trainingProgress.updateOne(
-      { phone },
-      {
-        $addToSet: { completedSections: sectionNo },
-        $set: { 
-          currentSection: sectionNo + 1,
-          lastUpdated: new Date()
-        }
-      }
-    );
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    const normalizedPhone = normalizePhoneE164(phone);
+    const progress = await this.collections.trainingProgress.findOne({ phone: normalizedPhone });
+    if (!progress) return null;
+    return { ...progress, _id: progress._id?.toString() } as any;
   }
 
-  /**
-   * Update current section (for navigation)
-   */
-  public async updateCurrentSection(phone: string, sectionNo: number): Promise<void> {
+  /** Check if user is in training mode */
+  public async isInTrainingMode(phone: string): Promise<boolean> {
     await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
-    
-    await this.collections.trainingProgress.updateOne(
-      { phone },
-      {
-        $set: { 
-          currentSection: sectionNo,
-          lastUpdated: new Date()
-        }
-      }
-    );
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    const normalizedPhone = normalizePhoneE164(phone);
+    const progress = await this.collections.trainingProgress.findOne({ phone: normalizedPhone });
+    return progress?.inTrainingMode || false;
   }
 
-  /**
-   * Create a new training section
-   */
-  public async createTrainingSection(data: { s_no: number; heading: string; content: string }): Promise<any> {
-    await this.ensureConnected();
-    const db = this.client.db(this.dbName);
-    const collection = db.collection('Training_KB');
-    
-    const result = await collection.insertOne({
-      s_no: data.s_no,
-      heading: data.heading,
-      content: data.content,
-      createdAt: new Date()
-    });
-    
-    return {
-      _id: result.insertedId.toString(),
-      ...data
-    };
-  }
-
-  /**
-   * Update a training section
-   */
-  public async updateTrainingSection(id: string, data: Partial<{ s_no: number; heading: string; content: string }>): Promise<any | null> {
-    await this.ensureConnected();
-    const db = this.client.db(this.dbName);
-    const collection = db.collection('Training_KB');
-    
-    const result = await collection.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: { ...data, updatedAt: new Date() } },
-      { returnDocument: 'after' }
-    );
-    
-    if (!result) return null;
-    
-    return {
-      _id: result._id.toString(),
-      s_no: result.s_no,
-      heading: result.heading,
-      content: result.content
-    };
-  }
-
-  /**
-   * Delete a training section
-   */
-  public async deleteTrainingSection(id: string): Promise<boolean> {
-    await this.ensureConnected();
-    const db = this.client.db(this.dbName);
-    const collection = db.collection('Training_KB');
-    
-    const result = await collection.deleteOne({ _id: new ObjectId(id) });
-    return result.deletedCount === 1;
-  }
-
-  /**
-   * Start training mode for a user
-   */
+  /** Start training mode for a user */
   public async startTrainingMode(phone: string): Promise<void> {
     await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
-    
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    const normalizedPhone = normalizePhoneE164(phone);
     await this.collections.trainingProgress.updateOne(
-      { phone },
-      {
-        $set: { 
-          inTrainingMode: true,
-          trainingStarted: true,
-          currentSection: 1,
-          lastUpdated: new Date()
-        },
-        $setOnInsert: {
-          completedSections: [],
+      { phone: normalizedPhone },
+      { 
+        $set: { inTrainingMode: true, trainingStarted: true, lastUpdated: new Date() },
+        $setOnInsert: { 
+          currentSection: 1, 
+          completedSections: [], 
           sectionChats: {},
-          createdAt: new Date()
+          createdAt: new Date() 
         }
       },
       { upsert: true }
     );
   }
 
-  /**
-   * Exit training mode for a user
-   */
+  /** Exit training mode for a user */
   public async exitTrainingMode(phone: string): Promise<void> {
     await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
-    
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    const normalizedPhone = normalizePhoneE164(phone);
     await this.collections.trainingProgress.updateOne(
-      { phone },
-      {
-        $set: { 
-          inTrainingMode: false,
-          lastUpdated: new Date()
-        }
+      { phone: normalizedPhone },
+      { $set: { inTrainingMode: false, lastUpdated: new Date() } }
+    );
+  }
+
+  /** Update current section for a user */
+  public async updateCurrentSection(phone: string, sectionNo: number): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    const normalizedPhone = normalizePhoneE164(phone);
+    await this.collections.trainingProgress.updateOne(
+      { phone: normalizedPhone },
+      { $set: { currentSection: sectionNo, lastUpdated: new Date() } },
+      { upsert: true }
+    );
+  }
+
+  /** Mark a section as completed */
+  public async markSectionCompleted(phone: string, sectionNo: number): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    const normalizedPhone = normalizePhoneE164(phone);
+    await this.collections.trainingProgress.updateOne(
+      { phone: normalizedPhone },
+      { 
+        $addToSet: { completedSections: sectionNo },
+        $set: { lastUpdated: new Date() }
       }
     );
   }
 
-  /**
-   * Check if user is in training mode
-   */
-  public async isInTrainingMode(phone: string): Promise<boolean> {
-    await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
-    
-    const progress = await this.collections.trainingProgress.findOne({ phone });
-    return progress?.inTrainingMode || false;
-  }
-
-  /**
-   * Move to next training section
-   */
+  /** Move to next section */
   public async moveToNextSection(phone: string): Promise<number> {
     await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
     
-    const progress = await this.collections.trainingProgress.findOne({ phone });
-    const nextSection = (progress?.currentSection || 1) + 1;
+    const normalizedPhone = normalizePhoneE164(phone);
+    const progress = await this.getOrCreateTrainingProgress(normalizedPhone);
+    const sections = await this.getTrainingSections();
     
-    await this.collections.trainingProgress.updateOne(
-      { phone },
-      {
-        $set: { 
-          currentSection: nextSection,
-          lastUpdated: new Date()
-        }
-      }
-    );
+    const currentIndex = sections.findIndex(s => s.s_no === progress.currentSection);
+    const nextIndex = currentIndex + 1;
     
-    return nextSection;
+    if (nextIndex >= sections.length) {
+      return progress.currentSection; // Stay at last section
+    }
+    
+    const nextSectionNo = sections[nextIndex].s_no;
+    await this.updateCurrentSection(normalizedPhone, nextSectionNo);
+    return nextSectionNo;
   }
 
-  /**
-   * Move to previous training section
-   */
+  /** Move to previous section */
   public async moveToPreviousSection(phone: string): Promise<number> {
     await this.ensureConnected();
-    if (!this.collections.trainingProgress) throw new Error('Training Progress collection is not initialized');
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
     
-    const progress = await this.collections.trainingProgress.findOne({ phone });
-    const prevSection = Math.max(1, (progress?.currentSection || 1) - 1);
+    const normalizedPhone = normalizePhoneE164(phone);
+    const progress = await this.getOrCreateTrainingProgress(normalizedPhone);
+    const sections = await this.getTrainingSections();
     
+    const currentIndex = sections.findIndex(s => s.s_no === progress.currentSection);
+    const prevIndex = currentIndex - 1;
+    
+    if (prevIndex < 0) {
+      return progress.currentSection; // Stay at first section
+    }
+    
+    const prevSectionNo = sections[prevIndex].s_no;
+    await this.updateCurrentSection(normalizedPhone, prevSectionNo);
+    return prevSectionNo;
+  }
+
+  /** Add a message to training chat history */
+  public async addTrainingMessage(
+    phone: string, 
+    sectionNo: number, 
+    role: 'user' | 'assistant', 
+    content: string
+  ): Promise<void> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    
+    const normalizedPhone = normalizePhoneE164(phone);
+    const message: TrainingMessage = { role, content, timestamp: new Date() };
+    
+    // Use dot notation to push to the array for specific section
     await this.collections.trainingProgress.updateOne(
-      { phone },
-      {
-        $set: { 
-          currentSection: prevSection,
-          lastUpdated: new Date()
-        }
-      }
+      { phone: normalizedPhone },
+      { 
+        $push: { [`sectionChats.${sectionNo}`]: message },
+        $set: { lastUpdated: new Date() }
+      },
+      { upsert: true }
+    );
+  }
+
+  /** Get training chat history for a specific section */
+  public async getTrainingChatHistory(
+    phone: string, 
+    sectionNo: number
+  ): Promise<TrainingMessage[]> {
+    await this.ensureConnected();
+    if (!this.collections.trainingProgress) throw new Error('Training progress collection is not initialized');
+    
+    const normalizedPhone = normalizePhoneE164(phone);
+    const progress = await this.collections.trainingProgress.findOne({ phone: normalizedPhone });
+    
+    if (!progress || !progress.sectionChats) return [];
+    
+    return progress.sectionChats[sectionNo] || [];
+  }
+
+  /** Create a new training section */
+  public async createTrainingSection(data: { s_no: number; heading: string; content: string }): Promise<TrainingSection> {
+    await this.ensureConnected();
+    if (!this.collections.trainingSections) throw new Error('Training sections collection is not initialized');
+    
+    const section: TrainingSection = {
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    const result = await this.collections.trainingSections.insertOne(section as any);
+    return { ...section, _id: result.insertedId.toString() } as any;
+  }
+
+  /** Update a training section */
+  public async updateTrainingSection(
+    id: string, 
+    updates: { s_no?: number; heading?: string; content?: string }
+  ): Promise<TrainingSection | null> {
+    await this.ensureConnected();
+    if (!this.collections.trainingSections) throw new Error('Training sections collection is not initialized');
+    
+    const result = await this.collections.trainingSections.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: { ...updates, updatedAt: new Date() } },
+      { returnDocument: 'after' }
     );
     
-    return prevSection;
+    return result ? { ...result, _id: result._id?.toString() } as any : null;
+  }
+
+  /** Delete a training section */
+  public async deleteTrainingSection(id: string): Promise<boolean> {
+    await this.ensureConnected();
+    if (!this.collections.trainingSections) throw new Error('Training sections collection is not initialized');
+    
+    const result = await this.collections.trainingSections.deleteOne({ _id: new ObjectId(id) });
+    return result.deletedCount === 1;
   }
 }
 

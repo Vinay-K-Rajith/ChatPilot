@@ -1467,8 +1467,8 @@ app.post('/api/leads', async (req, res) => {
       await mongodbService.addTrainingMessage(phone, sectionNo, 'user', message);
 
       // Get conversation history for this section
-      const sectionChat = progress.sectionChats?.[sectionNo] || [];
-      const conversationHistory = sectionChat.map(m => ({
+      const sectionChat = await mongodbService.getTrainingChatHistory(phone, sectionNo);
+      const conversationHistory = sectionChat.map((m: any) => ({
         role: m.role,
         content: m.content
       }));
