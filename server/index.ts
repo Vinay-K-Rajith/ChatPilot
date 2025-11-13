@@ -1,13 +1,18 @@
 import express, { type Request, Response, NextFunction } from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Serve uploaded files statically
-app.use('/uploads', express.static('public/uploads'));
+// Serve uploaded files statically using absolute path
+app.use('/uploads', express.static(path.join(__dirname, '..', 'public', 'uploads'), { fallthrough: true, dotfiles: 'ignore' }));
 
 app.use((req, res, next) => {
   const start = Date.now();
